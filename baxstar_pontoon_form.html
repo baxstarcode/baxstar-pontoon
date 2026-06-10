@@ -1,0 +1,1859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Baxstar Pontoon Check Out / Check In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bone: #c8c5bd;
+    --pearl: #e8e6e0;
+    --red: #c1272d;
+    --ink: #0a0a0a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f4f4f5;
+    color: #18181b;
+    line-height: 1.4;
+    padding: 0 0 120px 0;
+  }
+  .container { max-width: 800px; margin: 0 auto; padding: 16px; }
+  button, .check-item { touch-action: manipulation; }
+
+  /* Header */
+  .header {
+    background: var(--ink);
+    color: var(--pearl);
+    padding: 20px 16px;
+    border-bottom: 4px solid var(--red);
+    text-align: center;
+  }
+  .brand {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 800;
+    font-size: 28px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin: 0;
+    color: var(--pearl);
+  }
+  .brand .accent { color: var(--red); }
+  .subtitle {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 13px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--bone);
+    margin-top: 4px;
+  }
+
+  /* Sticky alert banners */
+  .storage-warning {
+    position: sticky;
+    top: 0;
+    z-index: 300;
+    background: #7f1d1d;
+    color: var(--pearl);
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.45;
+  }
+  .finalized-banner {
+    position: sticky;
+    top: 0;
+    z-index: 250;
+    background: #14532d;
+    color: var(--pearl);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .finalized-banner button {
+    background: transparent;
+    border: 1px solid var(--bone);
+    color: var(--pearl);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    min-height: 40px;
+  }
+
+  /* Queue (not-yet-filed) bar */
+  .queue-bar {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .queue-bar span { flex: 1; }
+  .queue-bar button {
+    background: #92400e;
+    color: #fffbeb;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 40px;
+  }
+
+  /* Top fields */
+  .top-card {
+    background: #fdfcfa;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .field { margin-bottom: 12px; }
+  .field:last-child { margin-bottom: 0; }
+  label {
+    display: block;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #52525b;
+    margin-bottom: 4px;
+  }
+  input[type="text"], input[type="date"], input[type="time"], textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #d4d4d8;
+    border-radius: 8px;
+    font-size: 16px;
+    font-family: inherit;
+    background: #fafafa;
+    color: #18181b;
+  }
+  input:focus, textarea:focus {
+    outline: none;
+    border-color: var(--red);
+    background: #fdfcfa;
+  }
+  textarea { min-height: 80px; resize: vertical; }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* Reservation advisory status */
+  .res-status {
+    margin-top: 6px;
+    font-size: 13px;
+    border-radius: 6px;
+    padding: 8px 10px;
+    line-height: 1.5;
+  }
+  .res-status.res-found { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .res-status.res-none { background: #fafafa; color: #52525b; border: 1px solid #e4e4e7; }
+  .res-status.res-suggest { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+  .res-status.res-error { background: #fafafa; color: #71717a; border: 1px dashed #d4d4d8; }
+  .res-status button {
+    background: #fdfcfa;
+    border: 1px solid #d4d4d8;
+    color: #18181b;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin: 4px 4px 0 0;
+    min-height: 40px;
+  }
+
+  /* Booking link */
+  .booking-link-wrap { margin-top: 6px; font-size: 14px; }
+  .booking-link-wrap a { color: #1d4ed8; font-weight: 600; }
+
+  /* Section */
+  .section {
+    background: #fdfcfa;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+  .section-header {
+    background: var(--ink);
+    color: var(--pearl);
+    padding: 14px 18px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border-left: 5px solid var(--red);
+  }
+  .section-body { padding: 16px; }
+
+  .subhead {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #18181b;
+    margin: 18px 0 10px 0;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #e4e4e7;
+  }
+  .subhead:first-child { margin-top: 0; }
+
+  /* Checkbox list */
+  .check-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    margin-bottom: 6px;
+    background: #fafafa;
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+    border: 1px solid #e4e4e7;
+  }
+  .check-item:active { background: #f4f4f5; }
+  .check-item input { display: none; }
+  .check-item .box {
+    width: 24px;
+    height: 24px;
+    border: 2px solid #a1a1aa;
+    border-radius: 5px;
+    margin-right: 14px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fdfcfa;
+    transition: all 0.15s;
+  }
+  .check-item input:checked + .box {
+    background: var(--red);
+    border-color: var(--red);
+  }
+  .check-item input:checked + .box::after {
+    content: '✓';
+    color: var(--pearl);
+    font-weight: 700;
+    font-size: 16px;
+  }
+  .check-item .label-text {
+    font-size: 15px;
+    color: #27272a;
+  }
+  .check-item input:checked ~ .label-text {
+    color: #18181b;
+    font-weight: 500;
+  }
+
+  /* Diagram */
+  .diagram-wrap {
+    background: #fafafa;
+    border: 1px solid #e4e4e7;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 8px;
+  }
+  .diagram-help {
+    font-size: 13px;
+    color: #71717a;
+    margin-bottom: 8px;
+    text-align: center;
+  }
+  .pontoon-svg {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    height: auto;
+    touch-action: manipulation;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .diagram-stack {
+    position: relative;
+    max-width: 300px;
+    margin: 0 auto;
+  }
+  .mark-picker {
+    position: absolute;
+    background: var(--ink);
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    padding: 6px;
+    display: flex;
+    gap: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 10;
+    transform: translate(-50%, -110%);
+  }
+  .mark-picker button {
+    background: #27272a;
+    color: var(--pearl);
+    border: none;
+    padding: 10px 12px;
+    border-radius: 5px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .mark-picker button:active { background: var(--red); }
+  .clear-marks {
+    display: block;
+    margin: 8px auto 0;
+    background: #fdfcfa;
+    border: 1px solid #d4d4d8;
+    color: #52525b;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    min-height: 40px;
+  }
+
+  /* Session manager */
+  .session-bar {
+    background: #fdfcfa;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow: hidden;
+  }
+  .session-current {
+    padding: 14px 16px;
+    border-bottom: 1px solid #e4e4e7;
+  }
+  .session-label {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #71717a;
+    margin-bottom: 2px;
+  }
+  .session-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #18181b;
+  }
+  .session-actions {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    background: #fafafa;
+  }
+  .session-btn {
+    flex: 1;
+    background: #fdfcfa;
+    border: 1px solid #d4d4d8;
+    color: #18181b;
+    padding: 12px;
+    border-radius: 8px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .session-btn.primary {
+    background: var(--red);
+    color: var(--pearl);
+    border-color: var(--red);
+  }
+  .session-btn:active { transform: translateY(1px); }
+  .rentals-list {
+    display: none;
+    border-top: 1px solid #e4e4e7;
+    background: #fafafa;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .rental-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e4e4e7;
+  }
+  .rental-row:last-child { border-bottom: none; }
+  .rental-row.current { background: #fef2f2; }
+  .rental-info { flex: 1; min-width: 0; }
+  .rental-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: #18181b;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    background: var(--red);
+    color: var(--pearl);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Barlow Condensed', sans-serif;
+  }
+  .badge.done { background: #16a34a; }
+  .badge.dark { background: #27272a; }
+  .badge.amber { background: #b45309; }
+  .rental-meta {
+    font-size: 12px;
+    color: #71717a;
+    margin-top: 2px;
+  }
+  .rental-action {
+    background: #fdfcfa;
+    border: 1px solid #d4d4d8;
+    color: #27272a;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    min-height: 40px;
+  }
+  .rental-action.danger {
+    color: var(--red);
+    padding: 10px;
+  }
+  .saved-indicator {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    background: #16a34a;
+    color: var(--pearl);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: all 0.2s;
+    z-index: 200;
+    pointer-events: none;
+  }
+  .saved-indicator.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Signature */
+  .sig-wrap {
+    margin-top: 8px;
+    background: #fafafa;
+    border: 2px dashed #d4d4d8;
+    border-radius: 8px;
+    padding: 8px;
+  }
+  .sig-canvas {
+    display: block;
+    width: 100%;
+    height: 140px;
+    background: #fff;
+    border-radius: 6px;
+    touch-action: none;
+    cursor: crosshair;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .sig-clear {
+    margin-top: 6px;
+    background: transparent;
+    border: none;
+    color: var(--red);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 8px 0;
+    min-height: 40px;
+  }
+
+  /* Locked (finalized) state */
+  body.locked .sig-clear,
+  body.locked .clear-marks { display: none; }
+  body.locked .check-item { pointer-events: none; }
+  body.locked .sig-canvas { cursor: default; }
+  body.locked input:disabled,
+  body.locked textarea:disabled {
+    background: #f1f0ee;
+    color: #3f3f46;
+    opacity: 1;
+    -webkit-text-fill-color: #3f3f46;
+  }
+  body.locked .section { border-left: 4px solid #14532d; }
+
+  /* Action bar */
+  .actions {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--ink);
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    display: flex;
+    gap: 10px;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.15);
+    z-index: 100;
+  }
+  .btn {
+    flex: 1;
+    padding: 14px 12px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    cursor: pointer;
+    min-height: 48px;
+  }
+  .btn-primary { background: var(--red); color: var(--pearl); }
+  .btn-secondary { background: #27272a; color: var(--pearl); border: 1px solid #3f3f46; }
+  .btn:active { transform: translateY(1px); }
+
+  /* Print */
+  @media print {
+    body { background: #fff; padding: 0; }
+    .actions, .clear-marks, .sig-clear, .queue-bar, .session-actions, .rentals-list { display: none !important; }
+    .section, .top-card { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
+    .header { margin: 0 0 12px 0; }
+    .check-item { background: #fff; border: 1px solid #ccc; padding: 8px 12px; }
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+    html { scroll-behavior: auto; }
+  }
+
+  /* Small screens */
+  @media (max-width: 480px) {
+    .brand { font-size: 24px; }
+    .row { grid-template-columns: 1fr; }
+    .section-header { font-size: 18px; padding: 12px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="storage-warning" id="storage-warning" hidden>
+  ⚠ NOT SAVING — this device is blocking storage (private browsing or full storage).
+  Keep this page open: entries exist only on screen until saving works again.
+</div>
+
+<div class="finalized-banner" id="finalized-banner" hidden>
+  <span>✓ Finalized — record locked</span>
+  <button type="button" onclick="unlockRental()">Unlock</button>
+</div>
+
+<div class="header">
+  <h1 class="brand">Baxstar <span class="accent">Outdoors</span></h1>
+  <div class="subtitle">Pontoon Check Out / Check In</div>
+</div>
+
+<div class="container">
+
+  <!-- Session manager -->
+  <div class="session-bar">
+    <div class="session-current">
+      <div class="session-label">Current Rental</div>
+      <div class="session-name" id="current-label">New rental — start filling out</div>
+    </div>
+    <div class="session-actions">
+      <button class="session-btn" onclick="toggleRentalsList()">Saved (<span id="rentals-count">0</span>)</button>
+      <button class="session-btn primary" onclick="newRental()">+ New Rental</button>
+    </div>
+    <div class="rentals-list" id="rentals-list">
+      <div id="rentals-list-items"></div>
+    </div>
+  </div>
+
+  <!-- Unsent-records queue status -->
+  <div class="queue-bar" id="queue-bar" hidden>
+    <span id="queue-msg"></span>
+    <button type="button" onclick="processQueue(true)">Retry now</button>
+  </div>
+
+  <div class="saved-indicator" id="saved-indicator">Saved ✓</div>
+
+  <!-- Top fields -->
+  <div class="top-card">
+    <div class="field">
+      <label for="client">Client Name</label>
+      <input type="text" id="client" placeholder="Full name" autocomplete="off">
+      <div class="res-status" id="res-status" hidden></div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="date">Date</label>
+        <input type="date" id="date">
+      </div>
+      <div class="field">
+        <label for="pontoon">Pontoon / Unit</label>
+        <input type="text" id="pontoon" placeholder="Unit #" autocomplete="off">
+      </div>
+    </div>
+    <div class="field" style="margin-top: 12px;">
+      <label for="booking">FareHarbor Booking #</label>
+      <input type="text" id="booking" placeholder="Booking number (blank for walk-up)" inputmode="numeric" autocomplete="off">
+      <div class="booking-link-wrap" id="booking-link-wrap" hidden>
+        <a id="booking-link" href="#" target="_blank" rel="noopener">Open booking in FareHarbor ↗</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHECK OUT -->
+  <div class="section">
+    <div class="section-header">Check Out</div>
+    <div class="section-body">
+
+      <div class="field">
+        <label for="out-time">Check Out Time</label>
+        <input type="time" id="out-time">
+      </div>
+
+      <div class="subhead">Safety and Operation</div>
+      <div id="safety-list"></div>
+
+      <div class="subhead">Pontoon Condition</div>
+      <div id="out-condition-list"></div>
+
+      <div class="subhead">Existing Wear and Tear</div>
+      <div class="diagram-wrap">
+        <div class="diagram-help">Tap the diagram to mark damage · Notes below</div>
+        <div class="diagram-stack">
+        <svg id="diagram-out" class="pontoon-svg" viewBox="0 0 260 360" xmlns="http://www.w3.org/2000/svg">
+          <!-- pontoon outline -->
+          <rect x="20" y="40" width="220" height="280" rx="20" ry="20" fill="#fff" stroke="#52525b" stroke-width="2"/>
+          <!-- bimini -->
+          <rect x="40" y="80" width="180" height="20" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
+          <text x="130" y="94" text-anchor="middle" font-size="11" fill="#52525b" font-family="Inter">Bimini Top</text>
+          <!-- engine -->
+          <rect x="100" y="10" width="60" height="30" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
+          <text x="130" y="30" text-anchor="middle" font-size="10" fill="#52525b" font-family="Inter">Engine</text>
+          <!-- seats - rear -->
+          <rect x="35" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <!-- middle seats -->
+          <rect x="35" y="170" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="170" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <!-- dash/helm -->
+          <rect x="95" y="180" width="70" height="30" rx="4" fill="#27272a"/>
+          <text x="130" y="200" text-anchor="middle" font-size="10" fill="#e8e6e0" font-family="Inter">Helm</text>
+          <!-- front seats -->
+          <rect x="35" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <!-- bow -->
+          <text x="130" y="335" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
+          <text x="130" y="58" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">STERN</text>
+        </svg>
+        </div>
+        <button type="button" class="clear-marks" onclick="clearMarks('diagram-out')">Clear Marks</button>
+      </div>
+      <div class="field" style="margin-top: 10px;">
+        <textarea id="out-notes" placeholder="Describe existing damage (location, type, severity)..."></textarea>
+      </div>
+
+      <div class="subhead">Rentee Signature (Check Out)</div>
+      <div class="sig-wrap">
+        <canvas class="sig-canvas" id="sig-out-rentee"></canvas>
+        <button type="button" class="sig-clear" onclick="clearSig('sig-out-rentee')">Clear Signature</button>
+      </div>
+
+      <div class="subhead">Renter Signature (Baxstar)</div>
+      <div class="sig-wrap">
+        <canvas class="sig-canvas" id="sig-out-renter"></canvas>
+        <button type="button" class="sig-clear" onclick="clearSig('sig-out-renter')">Clear Signature</button>
+      </div>
+
+      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
+        By signing, renter agrees they have been instructed on items above and the condition of the pontoon listed above is accurate.
+      </p>
+    </div>
+  </div>
+
+  <!-- CHECK IN -->
+  <div class="section">
+    <div class="section-header">Check In</div>
+    <div class="section-body">
+
+      <div class="field">
+        <label for="in-time">Check In Time</label>
+        <input type="time" id="in-time">
+      </div>
+
+      <div class="subhead">Pontoon Condition</div>
+      <div id="in-condition-list"></div>
+
+      <div class="subhead">New Wear and Tear</div>
+      <div class="diagram-wrap">
+        <div class="diagram-help">Tap the diagram to mark new damage · Notes below</div>
+        <div class="diagram-stack">
+        <svg id="diagram-in" class="pontoon-svg" viewBox="0 0 260 360" xmlns="http://www.w3.org/2000/svg">
+          <rect x="20" y="40" width="220" height="280" rx="20" ry="20" fill="#fff" stroke="#52525b" stroke-width="2"/>
+          <rect x="40" y="80" width="180" height="20" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
+          <text x="130" y="94" text-anchor="middle" font-size="11" fill="#52525b" font-family="Inter">Bimini Top</text>
+          <rect x="100" y="10" width="60" height="30" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
+          <text x="130" y="30" text-anchor="middle" font-size="10" fill="#52525b" font-family="Inter">Engine</text>
+          <rect x="35" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="35" y="170" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="170" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="95" y="180" width="70" height="30" rx="4" fill="#27272a"/>
+          <text x="130" y="200" text-anchor="middle" font-size="10" fill="#e8e6e0" font-family="Inter">Helm</text>
+          <rect x="35" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <rect x="175" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <text x="130" y="335" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
+          <text x="130" y="58" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">STERN</text>
+        </svg>
+        </div>
+        <button type="button" class="clear-marks" onclick="clearMarks('diagram-in')">Clear Marks</button>
+      </div>
+      <div class="field" style="margin-top: 10px;">
+        <textarea id="in-notes" placeholder="Describe any new damage at check-in..."></textarea>
+      </div>
+
+      <div class="subhead">Rentee Signature (Check In)</div>
+      <div class="sig-wrap">
+        <canvas class="sig-canvas" id="sig-in-rentee"></canvas>
+        <button type="button" class="sig-clear" onclick="clearSig('sig-in-rentee')">Clear Signature</button>
+      </div>
+
+      <div class="subhead">Renter Signature (Baxstar)</div>
+      <div class="sig-wrap">
+        <canvas class="sig-canvas" id="sig-in-renter"></canvas>
+        <button type="button" class="sig-clear" onclick="clearSig('sig-in-renter')">Clear Signature</button>
+      </div>
+
+      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
+        By signing, renter agrees to any updated information about the pontoon condition listed above.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<div class="actions">
+  <button class="btn btn-primary" id="finalize-btn" onclick="finalizeRental()">Finalize &amp; Send</button>
+  <button class="btn btn-secondary" id="unlock-btn" onclick="unlockRental()" hidden>Unlock to Edit</button>
+</div>
+
+<script>
+  /* =====================================================================
+     ZAPIER WEBHOOK — paste the catch-hook URL between the quotes below.
+     Until a real URL is pasted, finalized records queue safely on the
+     device and the yellow bar explains that filing isn't set up yet.
+     ===================================================================== */
+  const ZAPIER_WEBHOOK_URL = 'PASTE_URL_HERE';
+
+  /* =====================================================================
+     RECORD PAYLOAD — the JSON object POSTed to the Zapier catch-hook,
+     one per finalized rental. Use this block to map fields in the Zap.
+
+     Filed-document filename convention:  payload.filename
+       Pontoon_{client}_{date}_{bookingID}
+       - client sanitized to letters/numbers/underscores ("Unnamed" if blank)
+       - date is YYYY-MM-DD ("no_date" if blank)
+       - bookingID falls back to "walkup" when blank
+
+     {
+       formType:    "baxstar_pontoon_checkin"  // constant — use for routing
+       formVersion: 2                          // bumped if this shape changes
+       rentalId:    "r_1718..._ab12cd"         // unique id from this device
+       finalizedAt: "2026-06-10T17:22:01.000Z" // ISO timestamp of finalize
+       client:      "Jon Carlson"              // string, "" possible
+       date:        "2026-06-10"               // YYYY-MM-DD, "" possible
+       pontoonUnit: "Unit 2"                   // string, "" possible
+       bookingId:   "75312511"                 // FareHarbor booking #, "" = walk-up (no customer email)
+       fareharborUrl: "https://fareharbor.com/baxstarfishing/dashboard/?bookings=75312511" // "" when no bookingId
+       filename:    "Pontoon_Jon_Carlson_2026-06-10_75312511"
+       checkOut: {
+         time: "09:05",                        // HH:MM 24h, "" possible
+         safetyChecklist:    [ {item: "...", checked: true}, ... ]   // always all 10 items
+         conditionChecklist: [ {item: "...", checked: true}, ... ]   // always all 8 items
+         notes: "...",                         // existing wear & tear notes
+         damageMarks: [ {type: "Scratch", x: 132.4, y: 210.7}, ... ] // coords in the 260x360 diagram viewBox
+         signatures: { rentee: "data:image/png;base64,...", baxstar: "data:..." } // "" if unsigned
+       }
+       checkIn: {                              // same shape, no safetyChecklist
+         time, conditionChecklist, notes, damageMarks,
+         signatures: { rentee, baxstar }
+       }
+       summaryText: "BAXSTAR PONTOON ..."      // plain-text rendering of the whole
+                                               // record, ready for the customer email body
+     }
+     ===================================================================== */
+
+  const FAREHARBOR_BASE = 'https://fareharbor.com/baxstarfishing/dashboard/?bookings=';
+
+  // Storage keys
+  const STORAGE_KEY = 'baxstar_pontoon_rentals';
+  const ACTIVE_KEY = 'baxstar_active_rental_id';
+  const QUEUE_KEY = 'baxstar_pontoon_send_queue';
+
+  // Per-diagram marks tracking
+  const marksData = { 'diagram-out': [], 'diagram-in': [] };
+
+  let currentRentalId = null;
+  let saveTimer = null;
+  let dirty = false;
+
+  const prefersReducedMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function isLocked() { return document.body.classList.contains('locked'); }
+  function markDirty() { dirty = true; }
+
+  /* ---- MOCK RESERVATIONS ----------------------------------------------
+     Replace the body of fetchTodaysReservations() with the live source
+     later (e.g. fetch(...).then(r => r.json())). Everything else in the
+     form only talks to that one function. */
+  const MOCK_RESERVATIONS = [
+    { name: 'Tyler Brandt',         start: '09:00', bookingId: '75312480' },
+    { name: 'Jon Carlson',          start: '10:30', bookingId: '75312511' },
+    { name: 'John Carlsen',         start: '13:00', bookingId: '75312557' },
+    { name: 'Maria Gutierrez',      start: '11:00', bookingId: '75312602' },
+    { name: "D'Angelo Whitfield",   start: '14:30', bookingId: '75312648' },
+    { name: 'Sam & Kelly Onstad',   start: '15:00', bookingId: '75312693' }
+  ];
+
+  function todayStr() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fetchTodaysReservations() {
+    // Fetch-shaped: resolves with today's reservations, rejects if unavailable.
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(MOCK_RESERVATIONS.map(r => ({ ...r, date: todayStr() })));
+      }, 120);
+    });
+  }
+
+  /* ---- FUZZY NAME MATCHING -------------------------------------------- */
+  function normalizeName(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .sort()
+      .join(' ');
+  }
+
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    const m = a.length, n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, i) => i);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[n];
+  }
+
+  // Returns {status:'found', match} | {status:'suggest', options:[..]} | {status:'none'}
+  function matchReservation(name, list) {
+    const n = normalizeName(name);
+    if (!n) return { status: 'none' };
+    const exact = [], close = [];
+    for (const r of list) {
+      const rn = normalizeName(r.name);
+      if (rn === n) { exact.push(r); continue; }
+      const d = levenshtein(n, rn);
+      const tol = Math.min(3, Math.max(1, Math.floor(Math.max(n.length, rn.length) / 5)));
+      if (d <= tol) close.push({ r, d });
+    }
+    if (exact.length === 1) return { status: 'found', match: exact[0] };
+    if (exact.length > 1) return { status: 'suggest', options: exact };
+    if (close.length) {
+      close.sort((a, b) => a.d - b.d);
+      return { status: 'suggest', options: close.slice(0, 2).map(c => c.r) };
+    }
+    return { status: 'none' };
+  }
+
+  /* ---- RESERVATION ADVISORY UI (never blocking) ------------------------ */
+  let resToken = 0, resTimer = null;
+
+  function scheduleReservationCheck() {
+    clearTimeout(resTimer);
+    resTimer = setTimeout(runReservationCheck, 500);
+  }
+
+  function showResStatus(cls, html) {
+    const status = document.getElementById('res-status');
+    status.className = 'res-status ' + cls;
+    status.innerHTML = html;
+    status.hidden = false;
+  }
+
+  async function runReservationCheck() {
+    const status = document.getElementById('res-status');
+    const name = document.getElementById('client').value.trim();
+    if (isLocked() || name.length < 3) { status.hidden = true; return; }
+    const token = ++resToken;
+    let list;
+    try {
+      list = await fetchTodaysReservations();
+    } catch (e) {
+      if (token !== resToken) return;
+      showResStatus('res-error', "Couldn't verify reservation — bookings list unavailable. Enter details manually.");
+      return;
+    }
+    if (token !== resToken) return;
+    const result = matchReservation(name, list);
+    if (result.status === 'found') {
+      applyReservation(result.match);
+      showResStatus('res-found', '✓ Reservation found: ' + escapeHtml(result.match.name)
+        + ' · ' + escapeHtml(result.match.start) + ' · #' + escapeHtml(result.match.bookingId));
+    } else if (result.status === 'suggest') {
+      const btns = result.options.map((o, i) =>
+        '<button type="button" data-res-idx="' + i + '">' + escapeHtml(o.name) + ' · ' + escapeHtml(o.start) + '</button>'
+      ).join(' ');
+      showResStatus('res-suggest', 'Did you mean: ' + btns);
+      status.querySelectorAll('button').forEach((b) => {
+        b.addEventListener('click', () => {
+          const o = result.options[Number(b.dataset.resIdx)];
+          applyReservation(o);
+          showResStatus('res-found', '✓ Using reservation: ' + escapeHtml(o.name)
+            + ' · ' + escapeHtml(o.start) + ' · #' + escapeHtml(o.bookingId));
+        });
+      });
+    } else {
+      showResStatus('res-none', 'No matching reservation today — walk-up is fine.');
+    }
+  }
+
+  // Fills EMPTY fields only — never overwrites anything typed.
+  function applyReservation(r) {
+    const dateEl = document.getElementById('date');
+    const timeEl = document.getElementById('out-time');
+    const bookEl = document.getElementById('booking');
+    if (dateEl && !dateEl.value) dateEl.value = r.date;
+    if (timeEl && !timeEl.value) timeEl.value = r.start;
+    if (bookEl && !bookEl.value.trim()) { bookEl.value = r.bookingId; updateBookingLink(); }
+    autoSave();
+  }
+
+  /* ---- BOOKING LINK ----------------------------------------------------- */
+  function updateBookingLink() {
+    const v = document.getElementById('booking').value.trim();
+    const wrap = document.getElementById('booking-link-wrap');
+    const a = document.getElementById('booking-link');
+    if (v) {
+      a.href = FAREHARBOR_BASE + encodeURIComponent(v);
+      a.textContent = 'Open booking #' + v + ' in FareHarbor ↗';
+      wrap.hidden = false;
+    } else {
+      wrap.hidden = true;
+    }
+  }
+
+  /* ---- CHECKLISTS -------------------------------------------------------- */
+  const safetyItems = [
+    'Location of life vests, jump starter, fire extinguisher',
+    'Operating depth finder & ID shallow water',
+    'Location of bumpers',
+    'Operating anchor winch',
+    'Operating engine, Tilt/Trim',
+    'Parking on a beach/dock',
+    'Operating bimini top',
+    'Connecting a tow rope (optional)',
+    'Using changing room',
+    'Operating radio, lights, horn, etc.'
+  ];
+  const conditionItems = [
+    'Exterior',
+    'Upholstery & Canopy',
+    'Motor & prop',
+    'Anchor & winch',
+    'Electrical',
+    'Floor',
+    'Dash',
+    'Pontoons and underside'
+  ];
+
+  function buildList(containerId, items, prefix) {
+    const c = document.getElementById(containerId);
+    items.forEach((item, i) => {
+      const id = prefix + '-' + i;
+      const label = document.createElement('label');
+      label.className = 'check-item';
+      label.innerHTML = `
+        <input type="checkbox" id="${id}">
+        <span class="box"></span>
+        <span class="label-text">${item}</span>
+      `;
+      c.appendChild(label);
+    });
+  }
+
+  buildList('safety-list', safetyItems, 'safety');
+  buildList('out-condition-list', conditionItems, 'out-cond');
+  buildList('in-condition-list', conditionItems, 'in-cond');
+
+  /* ---- DIAGRAM tap-to-mark with type picker ------------------------------
+     Mark coordinates are stored in SVG viewBox units via getScreenCTM(),
+     which accounts for page scroll and zoom, so saved marks stay accurate.
+     Taps are detected with pointer events and a movement threshold so they
+     work on iOS Safari with pinch-zoom enabled: a real tap places a mark,
+     while scrolls and pinches that start on the diagram stay with the
+     browser. Falls back to click where pointer events don't exist. */
+  function setupDiagram(svgId) {
+    const svg = document.getElementById(svgId);
+    const stack = svg.parentElement;
+
+    function handleTap(clientX, clientY) {
+      if (isLocked()) return;
+      // Remove any existing picker
+      const existing = stack.querySelector('.mark-picker');
+      if (existing) { existing.remove(); return; }
+
+      const rect = stack.getBoundingClientRect();
+      const pickerLeft = clientX - rect.left;
+      const pickerTop = clientY - rect.top;
+
+      // Get SVG coords for the eventual mark
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+
+      const picker = document.createElement('div');
+      picker.className = 'mark-picker';
+      picker.style.left = pickerLeft + 'px';
+      picker.style.top = pickerTop + 'px';
+      picker.innerHTML = `
+        <button type="button" data-type="Scratch">Scratch</button>
+        <button type="button" data-type="Dent">Dent</button>
+        <button type="button" data-type="Other">Other</button>
+      `;
+      stack.appendChild(picker);
+
+      picker.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          let label = btn.dataset.type;
+          if (label === 'Other') {
+            const custom = prompt('Describe the damage:', '');
+            if (custom === null || custom.trim() === '') {
+              picker.remove();
+              return;
+            }
+            label = custom.trim();
+          }
+          placeMark(svg, p.x, p.y, label);
+          picker.remove();
+        });
+      });
+    }
+
+    if (window.PointerEvent) {
+      let downId = null, downX = 0, downY = 0, downT = 0, multi = false;
+      svg.addEventListener('pointerdown', (e) => {
+        if (downId !== null) { multi = true; return; }   // second finger: pinch, not a tap
+        downId = e.pointerId;
+        downX = e.clientX;
+        downY = e.clientY;
+        downT = Date.now();
+        multi = false;
+      });
+      svg.addEventListener('pointerup', (e) => {
+        const wasId = downId;
+        downId = null;
+        if (multi || e.pointerId !== wasId) return;
+        if (Math.hypot(e.clientX - downX, e.clientY - downY) > 12) return; // scroll/drag
+        if (Date.now() - downT > 600) return;                              // long-press
+        handleTap(e.clientX, e.clientY);
+      });
+      svg.addEventListener('pointercancel', () => { downId = null; });
+    } else {
+      svg.addEventListener('click', (e) => handleTap(e.clientX, e.clientY));
+    }
+
+    // Tap outside picker to close it
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.mark-picker') && !e.target.closest(`#${svgId}`)) {
+        const picker = stack.querySelector('.mark-picker');
+        if (picker) picker.remove();
+      }
+    });
+  }
+
+  function placeMark(svgIdOrSvg, x, y, label, skipTrack) {
+    const svg = typeof svgIdOrSvg === 'string' ? document.getElementById(svgIdOrSvg) : svgIdOrSvg;
+    const svgId = svg.id;
+    const mark = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    mark.classList.add('user-mark');
+    // Place label to the right of the X, but flip left if near right edge
+    const labelX = x > 180 ? x - 12 : x + 12;
+    const anchor = x > 180 ? 'end' : 'start';
+    mark.innerHTML = `
+      <circle cx="${x}" cy="${y}" r="9" fill="rgba(193,39,45,0.25)" stroke="#c1272d" stroke-width="2"/>
+      <line x1="${x-5}" y1="${y-5}" x2="${x+5}" y2="${y+5}" stroke="#c1272d" stroke-width="2.5"/>
+      <line x1="${x+5}" y1="${y-5}" x2="${x-5}" y2="${y+5}" stroke="#c1272d" stroke-width="2.5"/>
+      <text x="${labelX}" y="${y+4}" text-anchor="${anchor}" font-size="11" font-weight="700" fill="#c1272d" font-family="Barlow Condensed, sans-serif" stroke="#fff" stroke-width="3" paint-order="stroke">${escapeHtml(label)}</text>
+    `;
+    svg.appendChild(mark);
+    if (!skipTrack) {
+      marksData[svgId].push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, label });
+      autoSave();
+    }
+  }
+  setupDiagram('diagram-out');
+  setupDiagram('diagram-in');
+
+  function clearMarks(svgId) {
+    if (isLocked()) return;
+    document.querySelectorAll(`#${svgId} .user-mark`).forEach(el => el.remove());
+    marksData[svgId] = [];
+    autoSave();
+  }
+
+  /* ---- SIGNATURE CANVASES ------------------------------------------------ */
+  function setupSig(canvasId) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+      // Preserve any existing signature across resize/orientation change
+      let prev = null;
+      try {
+        if (canvas.width > 0 && !canvasIsEmpty(canvas)) prev = canvas.toDataURL('image/png');
+      } catch (e) { /* ignore */ }
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = rect.width * ratio;
+      canvas.height = rect.height * ratio;
+      ctx.scale(ratio, ratio);
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#0a0a0a';
+      if (prev) {
+        const img = new Image();
+        img.onload = () => ctx.drawImage(img, 0, 0, rect.width, rect.height);
+        img.src = prev;
+      }
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    let drawing = false;
+    let last = null;
+    let activeId = null;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches ? e.touches[0] : e;
+      return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+    }
+    function start(e) {
+      if (isLocked()) return;
+      if (e.pointerId !== undefined) {
+        if (activeId !== null) return;   // ignore a second finger mid-signature
+        activeId = e.pointerId;
+        if (canvas.setPointerCapture) {
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
+        }
+      }
+      if (e.cancelable) e.preventDefault();
+      drawing = true;
+      last = getPos(e);
+    }
+    function move(e) {
+      if (!drawing) return;
+      if (e.pointerId !== undefined && e.pointerId !== activeId) return;
+      if (e.cancelable) e.preventDefault();
+      const p = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      last = p;
+    }
+    function end(e) {
+      if (e && e.pointerId !== undefined && activeId !== null && e.pointerId !== activeId) return;
+      activeId = null;
+      if (drawing) { drawing = false; autoSave(); }
+      else { drawing = false; }
+    }
+    if (window.PointerEvent) {
+      // Pointer events: the reliable touch path on iOS Safari with pinch-zoom enabled
+      canvas.addEventListener('pointerdown', start);
+      canvas.addEventListener('pointermove', move);
+      canvas.addEventListener('pointerup', end);
+      canvas.addEventListener('pointercancel', end);
+      canvas.addEventListener('pointerleave', end);
+    } else {
+      canvas.addEventListener('mousedown', start);
+      canvas.addEventListener('mousemove', move);
+      canvas.addEventListener('mouseup', end);
+      canvas.addEventListener('mouseleave', end);
+      canvas.addEventListener('touchstart', start, { passive: false });
+      canvas.addEventListener('touchmove', move, { passive: false });
+      canvas.addEventListener('touchend', end);
+    }
+    // iOS belt-and-suspenders: a touch on the pad must never start a
+    // scroll/zoom gesture (which would fire pointercancel and kill the
+    // stroke). Scoped to the canvas — page pinch-zoom stays available.
+    canvas.addEventListener('touchstart', (e) => { if (!isLocked() && e.cancelable) e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => { if (drawing && e.cancelable) e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('gesturestart', (e) => { if (!isLocked()) e.preventDefault(); });
+  }
+  ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(setupSig);
+
+  function clearSig(id) {
+    if (isLocked()) return;
+    const canvas = document.getElementById(id);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    autoSave();
+  }
+
+  /* ---- SESSION PERSISTENCE ----------------------------------------------- */
+  function getAllRentals() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+    catch { return []; }
+  }
+  function saveAllRentals(rentals) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(rentals));
+      setStorageWarning(false);
+      return true;
+    } catch (e) {
+      setStorageWarning(true);
+      return false;
+    }
+  }
+  function setStorageWarning(on) {
+    const el = document.getElementById('storage-warning');
+    if (el) el.hidden = !on;
+  }
+  function generateId() {
+    return 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  function canvasIsEmpty(canvas) {
+    try {
+      const ctx = canvas.getContext('2d');
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] !== 0) return false;
+      }
+      return true;
+    } catch { return true; }
+  }
+
+  function serializeState() {
+    const state = {
+      inputs: {},
+      checks: {},
+      sigs: {},
+      marks: { out: [...marksData['diagram-out']], in: [...marksData['diagram-in']] }
+    };
+    ['client', 'date', 'pontoon', 'booking', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) state.inputs[id] = el.value;
+    });
+    for (let i = 0; i < safetyItems.length; i++) {
+      const el = document.getElementById('safety-' + i);
+      if (el) state.checks['safety-' + i] = el.checked;
+    }
+    for (let i = 0; i < conditionItems.length; i++) {
+      const oc = document.getElementById('out-cond-' + i);
+      const ic = document.getElementById('in-cond-' + i);
+      if (oc) state.checks['out-cond-' + i] = oc.checked;
+      if (ic) state.checks['in-cond-' + i] = ic.checked;
+    }
+    ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
+      const c = document.getElementById(id);
+      state.sigs[id] = canvasIsEmpty(c) ? '' : c.toDataURL('image/png');
+    });
+    return state;
+  }
+
+  function applyState(state) {
+    if (!state) return;
+    Object.entries(state.inputs || {}).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = val || '';
+    });
+    document.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = false);
+    Object.entries(state.checks || {}).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!val;
+    });
+    // Marks
+    document.querySelectorAll('#diagram-out .user-mark, #diagram-in .user-mark').forEach(el => el.remove());
+    marksData['diagram-out'] = [];
+    marksData['diagram-in'] = [];
+    (state.marks?.out || []).forEach(m => {
+      placeMark('diagram-out', m.x, m.y, m.label, true);
+      marksData['diagram-out'].push(m);
+    });
+    (state.marks?.in || []).forEach(m => {
+      placeMark('diagram-in', m.x, m.y, m.label, true);
+      marksData['diagram-in'].push(m);
+    });
+    // Signatures
+    ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
+      const canvas = document.getElementById(id);
+      const ctx = canvas.getContext('2d');
+      const ratio = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const dataUrl = state.sigs?.[id];
+      if (!dataUrl) return;
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvas.width / ratio, canvas.height / ratio);
+      };
+      img.src = dataUrl;
+    });
+    updateBookingLink();
+  }
+
+  function hasAnyContent(state) {
+    return Object.values(state.inputs).some(v => v && String(v).trim()) ||
+      Object.values(state.checks).some(v => v) ||
+      (state.marks?.out?.length > 0) || (state.marks?.in?.length > 0) ||
+      Object.values(state.sigs).some(v => v);
+  }
+
+  /* ---- SAVE (debounced + immediate) --------------------------------------
+     "Saved ✓" only flashes when the write to localStorage actually
+     succeeded; failures show the red NOT SAVING banner instead. */
+  function doSave() {
+    if (!currentRentalId) return false;
+    const state = serializeState();
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === currentRentalId);
+    const now = Date.now();
+
+    if (!hasAnyContent(state)) {
+      if (idx !== -1 && !rentals[idx].finalized) {
+        rentals.splice(idx, 1);
+        saveAllRentals(rentals);
+        renderRentalsList();
+      }
+      updateCurrentLabel();
+      dirty = false;
+      return true;
+    }
+
+    if (idx === -1) {
+      rentals.push({ id: currentRentalId, createdAt: now, updatedAt: now, state });
+    } else {
+      rentals[idx].state = state;
+      rentals[idx].updatedAt = now;
+    }
+    const ok = saveAllRentals(rentals);
+    if (ok) {
+      dirty = false;
+      flashSavedIndicator();
+    }
+    renderRentalsList();
+    updateCurrentLabel();
+    return ok;
+  }
+
+  function autoSave() {
+    markDirty();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(doSave, 400);
+  }
+
+  function saveNow() {
+    clearTimeout(saveTimer);
+    return doSave();
+  }
+
+  function flashSavedIndicator() {
+    const el = document.getElementById('saved-indicator');
+    if (!el) return;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 1000);
+  }
+
+  /* ---- PAYLOAD + SUMMARY -------------------------------------------------- */
+  function buildPayload(rental) {
+    const s = rental.state || {};
+    const inp = s.inputs || {};
+    const checks = s.checks || {};
+    const sigs = s.sigs || {};
+    const marks = s.marks || { out: [], in: [] };
+    const client = (inp.client || '').trim();
+    const date = inp.date || '';
+    const bookingId = (inp.booking || '').trim();
+    const safeClient = client.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Unnamed';
+    const mapMarks = arr => (arr || []).map(m => ({
+      type: m.label,
+      x: Math.round(m.x * 10) / 10,
+      y: Math.round(m.y * 10) / 10
+    }));
+    const payload = {
+      formType: 'baxstar_pontoon_checkin',
+      formVersion: 2,
+      rentalId: rental.id,
+      finalizedAt: new Date(rental.finalizedAt || Date.now()).toISOString(),
+      client: client,
+      date: date,
+      pontoonUnit: (inp.pontoon || '').trim(),
+      bookingId: bookingId,
+      fareharborUrl: bookingId ? FAREHARBOR_BASE + encodeURIComponent(bookingId) : '',
+      filename: 'Pontoon_' + safeClient + '_' + (date || 'no_date') + '_' + (bookingId || 'walkup'),
+      checkOut: {
+        time: inp['out-time'] || '',
+        safetyChecklist: safetyItems.map((item, i) => ({ item, checked: !!checks['safety-' + i] })),
+        conditionChecklist: conditionItems.map((item, i) => ({ item, checked: !!checks['out-cond-' + i] })),
+        notes: inp['out-notes'] || '',
+        damageMarks: mapMarks(marks.out),
+        signatures: { rentee: sigs['sig-out-rentee'] || '', baxstar: sigs['sig-out-renter'] || '' }
+      },
+      checkIn: {
+        time: inp['in-time'] || '',
+        conditionChecklist: conditionItems.map((item, i) => ({ item, checked: !!checks['in-cond-' + i] })),
+        notes: inp['in-notes'] || '',
+        damageMarks: mapMarks(marks.in),
+        signatures: { rentee: sigs['sig-in-rentee'] || '', baxstar: sigs['sig-in-renter'] || '' }
+      }
+    };
+    payload.summaryText = buildSummaryText(payload);
+    return payload;
+  }
+
+  function buildSummaryText(p) {
+    const ckList = l => l.filter(c => c.checked).map(c => '  [X] ' + c.item).join('\n') || '  (none checked)';
+    const mkList = l => l.length ? l.map(m => '  - ' + m.type + ' at (' + m.x + ', ' + m.y + ')').join('\n') : '  (no marks)';
+    const sigLine = (label, d) => '  ' + label + ': ' + (d ? 'captured' : 'NOT captured');
+    return 'BAXSTAR PONTOON CHECK OUT / CHECK IN\n'
+      + '=====================================\n\n'
+      + 'Client: ' + (p.client || '(no name)') + '\n'
+      + 'Date: ' + (p.date || '(no date)') + '\n'
+      + 'Pontoon/Unit: ' + (p.pontoonUnit || '(none)') + '\n'
+      + 'FareHarbor Booking #: ' + (p.bookingId || '(walk-up)') + '\n'
+      + (p.fareharborUrl ? 'Booking link: ' + p.fareharborUrl + '\n' : '')
+      + '\n--- CHECK OUT (' + (p.checkOut.time || 'no time') + ') ---\n\n'
+      + 'Safety & Operation reviewed:\n' + ckList(p.checkOut.safetyChecklist)
+      + '\n\nPontoon Condition reviewed:\n' + ckList(p.checkOut.conditionChecklist)
+      + '\n\nExisting damage marks:\n' + mkList(p.checkOut.damageMarks)
+      + '\n\nExisting wear/tear notes:\n' + (p.checkOut.notes || '(none)')
+      + '\n\nSignatures:\n' + sigLine('Rentee (check out)', p.checkOut.signatures.rentee)
+      + '\n' + sigLine('Baxstar (check out)', p.checkOut.signatures.baxstar)
+      + '\n\n--- CHECK IN (' + (p.checkIn.time || 'no time') + ') ---\n\n'
+      + 'Pontoon Condition reviewed:\n' + ckList(p.checkIn.conditionChecklist)
+      + '\n\nNew damage marks:\n' + mkList(p.checkIn.damageMarks)
+      + '\n\nNew wear/tear notes:\n' + (p.checkIn.notes || '(none)')
+      + '\n\nSignatures:\n' + sigLine('Rentee (check in)', p.checkIn.signatures.rentee)
+      + '\n' + sigLine('Baxstar (check in)', p.checkIn.signatures.baxstar)
+      + '\n\n=====================================\n'
+      + 'Record ID: ' + p.rentalId + '\n'
+      + 'Finalized: ' + p.finalizedAt;
+  }
+
+  /* ---- SEND QUEUE ----------------------------------------------------------
+     Finalized records are queued in localStorage and sent to the Zapier
+     hook. Anything that can't send (no URL yet, offline, server error)
+     stays queued and retries on load, on reconnect, and on "Retry now". */
+  function webhookConfigured() {
+    return /^https?:\/\//.test(ZAPIER_WEBHOOK_URL);
+  }
+  function getQueue() {
+    try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; }
+    catch { return []; }
+  }
+  function setQueue(q) {
+    try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); return true; }
+    catch (e) { setStorageWarning(true); return false; }
+  }
+  function enqueueSend(rentalId, payload) {
+    const q = getQueue().filter(e => e.rentalId !== rentalId);
+    q.push({ rentalId, payload, queuedAt: Date.now(), attempts: 0 });
+    setQueue(q);
+    updateQueueUI();
+  }
+  function markFiled(rentalId) {
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === rentalId);
+    if (idx !== -1) {
+      rentals[idx].filedAt = Date.now();
+      saveAllRentals(rentals);
+    }
+  }
+
+  async function sendPayload(payload) {
+    const res = await fetch(ZAPIER_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return true;
+  }
+
+  let queueBusy = false;
+  async function processQueue(manual) {
+    if (queueBusy) return;
+    queueBusy = true;
+    try {
+      const queue = getQueue();
+      if (!queue.length) { updateQueueUI(); return; }
+      if (!webhookConfigured()) { updateQueueUI(); return; }
+      const remaining = [];
+      for (const entry of queue) {
+        try {
+          await sendPayload(entry.payload);
+          markFiled(entry.rentalId);
+        } catch (err) {
+          entry.attempts = (entry.attempts || 0) + 1;
+          entry.lastError = String((err && err.message) || err);
+          remaining.push(entry);
+        }
+      }
+      setQueue(remaining);
+      updateQueueUI();
+      renderRentalsList();
+    } finally {
+      queueBusy = false;
+    }
+  }
+
+  function updateQueueUI() {
+    const bar = document.getElementById('queue-bar');
+    const msg = document.getElementById('queue-msg');
+    if (!bar || !msg) return;
+    const q = getQueue();
+    if (!q.length) { bar.hidden = true; return; }
+    const n = q.length;
+    const recs = n + ' record' + (n > 1 ? 's' : '');
+    let text;
+    if (!webhookConfigured()) {
+      text = recs + ' saved on this device but not filed yet — filing isn\'t set up (webhook URL not pasted in yet).';
+    } else if (navigator.onLine === false) {
+      text = recs + ' saved on this device, waiting to be filed — will send automatically when back online.';
+    } else {
+      text = recs + ' saved on this device but not filed yet — last send failed; will keep retrying.';
+    }
+    msg.textContent = text;
+    bar.hidden = false;
+  }
+
+  /* ---- FINALIZE / LOCK ------------------------------------------------------ */
+  function setLocked(locked) {
+    document.body.classList.toggle('locked', locked);
+    document.querySelectorAll('input, textarea').forEach(el => { el.disabled = locked; });
+    document.getElementById('finalized-banner').hidden = !locked;
+    document.getElementById('finalize-btn').hidden = locked;
+    document.getElementById('unlock-btn').hidden = !locked;
+    if (locked) document.getElementById('res-status').hidden = true;
+  }
+
+  function finalizeRental() {
+    if (isLocked() || !currentRentalId) return;
+    const state = serializeState();
+    // Ignore the auto-filled date when judging emptiness
+    const meaningful = { ...state, inputs: { ...state.inputs, date: '' } };
+    if (!hasAnyContent(meaningful)) { alert('Nothing to finalize — the form is empty.'); return; }
+    if (!confirm('Finalize this rental?\n\nThe form will lock and the record will be filed. You can unlock later if something needs fixing.')) return;
+    saveNow();
+    const now = Date.now();
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === currentRentalId);
+    let rec;
+    if (idx !== -1) {
+      rentals[idx].finalized = true;
+      rentals[idx].finalizedAt = now;
+      rec = rentals[idx];
+      saveAllRentals(rentals);
+    } else {
+      // Storage write failed — still build the record from live state so the send can try
+      rec = { id: currentRentalId, createdAt: now, updatedAt: now, finalized: true, finalizedAt: now, state };
+    }
+    const payload = buildPayload(rec);
+    enqueueSend(rec.id, payload);
+    setLocked(true);
+    renderRentalsList();
+    updateQueueUI();
+    processQueue();
+    window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }
+
+  function unlockRental() {
+    if (!confirm('Unlock this finalized record for editing?\n\nYou will need to Finalize & Send again to re-file it.')) return;
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === currentRentalId);
+    if (idx !== -1) {
+      rentals[idx].finalized = false;
+      rentals[idx].unlockedAt = Date.now();
+      saveAllRentals(rentals);
+    }
+    // Drop any stale unsent payload — re-finalizing queues a fresh one
+    setQueue(getQueue().filter(q => q.rentalId !== currentRentalId));
+    setLocked(false);
+    renderRentalsList();
+    updateQueueUI();
+  }
+
+  /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
+  function clearForm() {
+    ['client', 'date', 'pontoon', 'booking', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    document.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = false);
+    document.querySelectorAll('#diagram-out .user-mark, #diagram-in .user-mark').forEach(el => el.remove());
+    marksData['diagram-out'] = [];
+    marksData['diagram-in'] = [];
+    ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
+      const canvas = document.getElementById(id);
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+    document.getElementById('res-status').hidden = true;
+    updateBookingLink();
+  }
+
+  function newRental() {
+    saveNow();
+    currentRentalId = generateId();
+    try { localStorage.setItem(ACTIVE_KEY, currentRentalId); } catch (e) { /* surfaced by save banner */ }
+    setLocked(false);
+    clearForm();
+    document.getElementById('date').valueAsDate = new Date();
+    document.getElementById('rentals-list').style.display = 'none';
+    dirty = false;
+    updateCurrentLabel();
+    renderRentalsList();
+    window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }
+
+  function openRental(id) {
+    saveNow();
+    const rentals = getAllRentals();
+    const r = rentals.find(x => x.id === id);
+    if (!r) return;
+    currentRentalId = id;
+    try { localStorage.setItem(ACTIVE_KEY, id); } catch (e) { /* surfaced by save banner */ }
+    setLocked(false);
+    clearForm();
+    applyState(r.state);
+    setLocked(!!r.finalized);
+    document.getElementById('rentals-list').style.display = 'none';
+    dirty = false;
+    updateCurrentLabel();
+    renderRentalsList();
+    window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }
+
+  function deleteRental(id) {
+    const r = getAllRentals().find(x => x.id === id);
+    const msg = r && r.finalized
+      ? 'This record is FINALIZED. Delete it from this device? This cannot be undone.'
+      : 'Delete this rental? This cannot be undone.';
+    if (!confirm(msg)) return;
+    let rentals = getAllRentals();
+    rentals = rentals.filter(x => x.id !== id);
+    saveAllRentals(rentals);
+    if (currentRentalId === id) {
+      // Drop the id first so newRental's save flush can't resurrect the deleted record
+      currentRentalId = null;
+      newRental();
+    } else {
+      renderRentalsList();
+    }
+  }
+
+  function toggleRentalsList() {
+    const list = document.getElementById('rentals-list');
+    list.style.display = list.style.display === 'none' || !list.style.display ? 'block' : 'none';
+  }
+
+  function updateCurrentLabel() {
+    const labelEl = document.getElementById('current-label');
+    if (!labelEl) return;
+    const rentals = getAllRentals();
+    const r = rentals.find(x => x.id === currentRentalId);
+    const liveClient = document.getElementById('client')?.value;
+    const liveDate = document.getElementById('date')?.value;
+    const livePontoon = document.getElementById('pontoon')?.value;
+    if (liveClient || r) {
+      const client = liveClient || r?.state?.inputs?.client || '';
+      const date = liveDate || r?.state?.inputs?.date || '';
+      const pontoon = livePontoon || r?.state?.inputs?.pontoon || '';
+      if (client) {
+        labelEl.textContent = client + (date ? ' · ' + date : '') + (pontoon ? ' · ' + pontoon : '');
+      } else {
+        labelEl.textContent = 'New rental — start by entering client name';
+      }
+    } else {
+      labelEl.textContent = 'New rental — start by entering client name';
+    }
+  }
+
+  function renderRentalsList() {
+    const list = document.getElementById('rentals-list-items');
+    if (!list) return;
+    const rentals = getAllRentals().sort((a, b) => b.updatedAt - a.updatedAt);
+    const countEl = document.getElementById('rentals-count');
+    if (countEl) countEl.textContent = rentals.length;
+
+    if (rentals.length === 0) {
+      list.innerHTML = '<div style="padding: 16px; color: #71717a; font-size: 13px; text-align: center;">No saved rentals yet</div>';
+      return;
+    }
+
+    const queuedIds = new Set(getQueue().map(q => q.rentalId));
+
+    list.innerHTML = rentals.map(r => {
+      const s = r.state || {};
+      const client = s.inputs?.client || '(unnamed)';
+      const date = s.inputs?.date || '';
+      const pontoon = s.inputs?.pontoon || '';
+      const isCurrent = r.id === currentRentalId;
+      const hasCheckIn = !!(s.inputs?.['in-time'] || s.sigs?.['sig-in-rentee']);
+      const meta = [date, pontoon, hasCheckIn ? 'Check-in done' : 'Check-out only'].filter(Boolean).join(' · ');
+      let badges = '';
+      if (isCurrent) badges += '<span class="badge">CURRENT</span>';
+      if (r.finalized) {
+        badges += '<span class="badge dark">FINALIZED</span>';
+        if (r.filedAt) badges += '<span class="badge done">FILED</span>';
+        else if (queuedIds.has(r.id)) badges += '<span class="badge amber">QUEUED</span>';
+      } else if (hasCheckIn) {
+        badges += '<span class="badge done">DONE</span>';
+      }
+      return `
+        <div class="rental-row ${isCurrent ? 'current' : ''}">
+          <div class="rental-info">
+            <div class="rental-name">${escapeHtml(client)}${badges}</div>
+            <div class="rental-meta">${escapeHtml(meta)}</div>
+          </div>
+          ${isCurrent ? '' : `<button class="rental-action" onclick="openRental('${r.id}')">Open</button>`}
+          <button class="rental-action danger" onclick="deleteRental('${r.id}')">✕</button>
+        </div>
+      `;
+    }).join('');
+  }
+
+  /* ---- INIT ----------------------------------------------------------------- */
+  function init() {
+    // Probe storage so private-mode/full-disk is visible immediately
+    try {
+      localStorage.setItem('__bx_probe', '1');
+      localStorage.removeItem('__bx_probe');
+    } catch (e) {
+      setStorageWarning(true);
+    }
+
+    // Hook all inputs/textareas to auto-save
+    document.querySelectorAll('input, textarea').forEach(el => {
+      el.addEventListener('input', autoSave);
+      el.addEventListener('change', autoSave);
+    });
+    // Live label updates
+    ['client', 'date', 'pontoon'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', updateCurrentLabel);
+    });
+    // Reservation advisory check on the client name
+    document.getElementById('client').addEventListener('input', scheduleReservationCheck);
+    // FareHarbor link follows the booking field
+    document.getElementById('booking').addEventListener('input', updateBookingLink);
+
+    // Guard the auto-save window against silent loss
+    window.addEventListener('beforeunload', (e) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
+    // Queued sends retry when connectivity returns
+    window.addEventListener('online', () => processQueue());
+
+    // Restore active rental or create new
+    const activeId = (() => {
+      try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; }
+    })();
+    const rentals = getAllRentals();
+    const existingActive = activeId ? rentals.find(r => r.id === activeId) : null;
+
+    if (existingActive) {
+      currentRentalId = activeId;
+      applyState(existingActive.state);
+      setLocked(!!existingActive.finalized);
+    } else {
+      currentRentalId = generateId();
+      try { localStorage.setItem(ACTIVE_KEY, currentRentalId); } catch (e) { /* probed above */ }
+      document.getElementById('date').valueAsDate = new Date();
+    }
+    updateCurrentLabel();
+    renderRentalsList();
+    updateBookingLink();
+    updateQueueUI();
+    processQueue();
+  }
+
+  // Wait for canvases to be sized before applying state
+  window.addEventListener('load', init);
+</script>
+</body>
+</html>
