@@ -164,8 +164,26 @@
     background: #fdfcfa;
   }
   textarea { min-height: 80px; resize: vertical; }
+  /* iOS Safari gives native date/time inputs an intrinsic width that can
+     overflow their card; strip the native appearance and pin them to the
+     container. min-height keeps them matched to the text inputs. */
+  input[type="date"], input[type="time"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    box-sizing: border-box;
+  }
+  input[type="date"]::-webkit-date-and-time-value,
+  input[type="time"]::-webkit-date-and-time-value {
+    text-align: left;
+  }
 
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row > .field { min-width: 0; }
 
   /* Reservation advisory status */
   .res-status {
@@ -308,26 +326,32 @@
     margin: 0 auto;
   }
   .mark-picker {
-    position: absolute;
+    /* Anchored to the screen center, not the tap point, so it can never
+       render clipped when a tap lands at the diagram edge. */
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
     background: var(--ink);
     border: 1px solid var(--red);
     border-radius: 8px;
     padding: 6px;
     display: flex;
+    flex-direction: column;
     gap: 4px;
+    min-width: 130px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     z-index: 10;
-    transform: translate(-50%, -110%);
   }
   .mark-picker button {
     background: #27272a;
     color: var(--pearl);
     border: none;
-    padding: 10px 12px;
+    padding: 6px 12px;
     border-radius: 5px;
     font-family: 'Barlow Condensed', sans-serif;
     font-weight: 700;
-    font-size: 13px;
+    font-size: 11px;
     letter-spacing: 1px;
     text-transform: uppercase;
     cursor: pointer;
@@ -679,6 +703,9 @@
           <!-- engine -->
           <rect x="100" y="10" width="60" height="30" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
           <text x="130" y="30" text-anchor="middle" font-size="10" fill="#52525b" font-family="Inter">Engine</text>
+          <!-- anchor box (stern-right) -->
+          <rect x="178" y="46" width="52" height="26" rx="4" fill="#27272a"/>
+          <text x="204" y="63" text-anchor="middle" font-size="10" fill="#fff" font-family="Inter">Anchor</text>
           <!-- seats - rear -->
           <rect x="35" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
           <rect x="175" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
@@ -691,8 +718,10 @@
           <!-- front seats -->
           <rect x="35" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
           <rect x="175" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
+          <!-- front deck -->
+          <rect x="45" y="318" width="170" height="16" rx="3" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
           <!-- bow -->
-          <text x="130" y="335" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
+          <text x="130" y="348" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
           <text x="130" y="58" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">STERN</text>
         </svg>
         </div>
@@ -701,6 +730,14 @@
       <div class="field" style="margin-top: 10px;">
         <textarea id="out-notes" placeholder="Describe existing damage (location, type, severity)..."></textarea>
       </div>
+
+      <!-- Legal language — confirmed by Brady. $1,000 deductible is temporary, update when new insurance policy lands. -->
+      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
+        By signing below, the Renter acknowledges that: (1) they have received and understood instruction on the safe operation and features of the pontoon, including the items listed in the Safety and Operation section above; and (2) the condition of the pontoon at the time it was handed off to the Renter is accurately and completely represented by the descriptions and markings in the Existing Wear and Tear section and diagram above. The Renter agrees that any damage not recorded in that section did not exist at the time of handoff.
+      </p>
+      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
+        The Renter acknowledges and agrees that a $750 damage deposit hold is authorized on the card on file, administered through FareHarbor, for the duration of the rental and for up to four (4) days after the rental period ends, to allow time to assess damage and obtain repair estimates. If the cost to repair damage occurring during the rental period exceeds $750, the Renter authorizes Baxstar Fishing LLC to charge the card on file for the additional repair cost, up to the full amount of the applicable insurance deductible ($1,000).
+      </p>
 
       <div class="subhead">Rentee Signature (Check Out)</div>
       <div class="sig-wrap">
@@ -713,10 +750,6 @@
         <canvas class="sig-canvas" id="sig-out-renter"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-out-renter')">Clear Signature</button>
       </div>
-
-      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
-        By signing, renter agrees they have been instructed on items above and the condition of the pontoon listed above is accurate.
-      </p>
     </div>
   </div>
 
@@ -743,6 +776,8 @@
           <text x="130" y="94" text-anchor="middle" font-size="11" fill="#52525b" font-family="Inter">Bimini Top</text>
           <rect x="100" y="10" width="60" height="30" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
           <text x="130" y="30" text-anchor="middle" font-size="10" fill="#52525b" font-family="Inter">Engine</text>
+          <rect x="178" y="46" width="52" height="26" rx="4" fill="#27272a"/>
+          <text x="204" y="63" text-anchor="middle" font-size="10" fill="#fff" font-family="Inter">Anchor</text>
           <rect x="35" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
           <rect x="175" y="110" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
           <rect x="35" y="170" width="50" height="50" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
@@ -751,7 +786,8 @@
           <text x="130" y="200" text-anchor="middle" font-size="10" fill="#e8e6e0" font-family="Inter">Helm</text>
           <rect x="35" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
           <rect x="175" y="240" width="50" height="60" rx="8" fill="#f4f4f5" stroke="#a1a1aa" stroke-width="1"/>
-          <text x="130" y="335" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
+          <rect x="45" y="318" width="170" height="16" rx="3" fill="#e4e4e7" stroke="#52525b" stroke-width="1"/>
+          <text x="130" y="348" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">BOW</text>
           <text x="130" y="58" text-anchor="middle" font-size="10" fill="#71717a" font-family="Inter">STERN</text>
         </svg>
         </div>
@@ -760,6 +796,10 @@
       <div class="field" style="margin-top: 10px;">
         <textarea id="in-notes" placeholder="Describe any new damage at check-in..."></textarea>
       </div>
+
+      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
+        By signing below, the Renter agrees that: (1) the descriptions and markings in the Pontoon Condition and Wear and Tear sections above accurately represent the condition of the pontoon at the time of return; and (2) the Renter is responsible for any new damage to the pontoon identified during this check-in that was not present in the condition recorded at check-out, as documented above.
+      </p>
 
       <div class="subhead">Rentee Signature (Check In)</div>
       <div class="sig-wrap">
@@ -772,10 +812,6 @@
         <canvas class="sig-canvas" id="sig-in-renter"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-in-renter')">Clear Signature</button>
       </div>
-
-      <p style="font-size: 12px; color: #71717a; margin-top: 12px; line-height: 1.5;">
-        By signing, renter agrees to any updated information about the pontoon condition listed above.
-      </p>
     </div>
   </div>
 
@@ -1065,10 +1101,6 @@
       const existing = stack.querySelector('.mark-picker');
       if (existing) { existing.remove(); return; }
 
-      const rect = stack.getBoundingClientRect();
-      const pickerLeft = clientX - rect.left;
-      const pickerTop = clientY - rect.top;
-
       // Get SVG coords for the eventual mark
       const pt = svg.createSVGPoint();
       pt.x = clientX;
@@ -1077,11 +1109,18 @@
 
       const picker = document.createElement('div');
       picker.className = 'mark-picker';
-      picker.style.left = pickerLeft + 'px';
-      picker.style.top = pickerTop + 'px';
+      // position:fixed centers it on the layout viewport; when the page is
+      // pinch-zoomed that can sit outside what's visible, so re-center on
+      // the visual viewport where the API exists.
+      const vv = window.visualViewport;
+      if (vv) {
+        picker.style.left = (vv.offsetLeft + vv.width / 2) + 'px';
+        picker.style.top = (vv.offsetTop + vv.height / 2) + 'px';
+      }
       picker.innerHTML = `
         <button type="button" data-type="Scratch">Scratch</button>
         <button type="button" data-type="Dent">Dent</button>
+        <button type="button" data-type="Rip">Rip</button>
         <button type="button" data-type="Other">Other</button>
       `;
       stack.appendChild(picker);
