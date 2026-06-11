@@ -165,7 +165,7 @@
     color: #52525b;
     margin-bottom: 4px;
   }
-  input[type="text"], input[type="date"], input[type="time"], textarea {
+  input[type="text"], input[type="email"], input[type="date"], input[type="time"], textarea {
     width: 100%;
     padding: 12px 14px;
     border: 1px solid #d4d4d8;
@@ -691,6 +691,10 @@
         <a id="booking-link" href="#" target="_blank" rel="noopener">Open booking in FareHarbor ↗</a>
       </div>
     </div>
+    <div class="field" style="margin-top: 12px;">
+      <label for="email">Customer Email (optional — for their copy)</label>
+      <input type="email" id="email" placeholder="customer@example.com" inputmode="email" autocomplete="off">
+    </div>
   </div>
 
   <!-- CHECK OUT -->
@@ -843,15 +847,20 @@
 
 <script>
   /* =====================================================================
-     ZAPIER WEBHOOK — paste the catch-hook URL between the quotes below.
+     FILING BACKEND — Google Apps Script web app (backend/Code.gs in this
+     repo). Paste the deployment's /exec URL between the quotes below.
+     FILING_TOKEN must match CONFIG.TOKEN in backend/Code.gs.
      Until a real URL is pasted, finalized records queue safely on the
      device and the yellow bar explains that filing isn't set up yet.
      ===================================================================== */
-  const ZAPIER_WEBHOOK_URL = 'PASTE_URL_HERE';
+  const FILING_URL = 'PASTE_APPS_SCRIPT_EXEC_URL_HERE';
+  const FILING_TOKEN = '122e17decac6b1e5fd414886f5ca95b7';
 
   /* =====================================================================
-     RECORD PAYLOAD — the JSON object POSTed to the Zapier catch-hook,
-     one per finalized rental. Use this block to map fields in the Zap.
+     RECORD PAYLOAD — the JSON object POSTed to the filing backend,
+     one per finalized rental. The POST body is this object plus
+     { action: 'finalize', token: FILING_TOKEN }, sent as text/plain
+     (a CORS simple request — Apps Script cannot answer a preflight).
 
      Filed-document filename convention:  payload.filename
        Pontoon_{client}_{date}_{bookingID}
@@ -861,13 +870,14 @@
 
      {
        formType:    "baxstar_pontoon_checkin"  // constant — use for routing
-       formVersion: 2                          // bumped if this shape changes
+       formVersion: 3                          // bumped if this shape changes
        rentalId:    "r_1718..._ab12cd"         // unique id from this device
        finalizedAt: "2026-06-10T17:22:01.000Z" // ISO timestamp of finalize
        client:      "Jon Carlson"              // string, "" possible
        date:        "2026-06-10"               // YYYY-MM-DD, "" possible
        pontoonUnit: "Unit 2"                   // string, "" possible
-       bookingId:   "75312511"                 // FareHarbor booking #, "" = walk-up (no customer email)
+       bookingId:   "75312511"                 // FareHarbor booking #, "" = walk-up
+       customerEmail: "jon@example.com"        // optional — "" skips the customer email
        fareharborUrl: "https://fareharbor.com/baxstarfishing/dashboard/?bookings=75312511" // "" when no bookingId
        filename:    "Pontoon_Jon_Carlson_2026-06-10_75312511"
        checkOut: {
@@ -1368,7 +1378,7 @@
       sigs: {},
       marks: { out: [...marksData['diagram-out']], in: [...marksData['diagram-in']] }
     };
-    ['client', 'date', 'pontoon', 'booking', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
       const el = document.getElementById(id);
       if (el) state.inputs[id] = el.value;
     });
@@ -1510,13 +1520,14 @@
     }));
     const payload = {
       formType: 'baxstar_pontoon_checkin',
-      formVersion: 2,
+      formVersion: 3,
       rentalId: rental.id,
       finalizedAt: new Date(rental.finalizedAt || Date.now()).toISOString(),
       client: client,
       date: date,
       pontoonUnit: (inp.pontoon || '').trim(),
       bookingId: bookingId,
+      customerEmail: (inp.email || '').trim(),
       fareharborUrl: bookingId ? FAREHARBOR_BASE + encodeURIComponent(bookingId) : '',
       filename: 'Pontoon_' + safeClient + '_' + (date || 'no_date') + '_' + (bookingId || 'walkup'),
       checkOut: {
@@ -1569,11 +1580,12 @@
   }
 
   /* ---- SEND QUEUE ----------------------------------------------------------
-     Finalized records are queued in localStorage and sent to the Zapier
-     hook. Anything that can't send (no URL yet, offline, server error)
-     stays queued and retries on load, on reconnect, and on "Retry now". */
+     Finalized records are queued in localStorage and sent to the filing
+     backend. Anything that can't send (no URL yet, offline, server error,
+     backend rejection) stays queued and retries on load, on reconnect,
+     and on "Retry now". */
   function webhookConfigured() {
-    return /^https?:\/\//.test(ZAPIER_WEBHOOK_URL);
+    return /^https?:\/\//.test(FILING_URL);
   }
   function getQueue() {
     try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; }
@@ -1599,12 +1611,21 @@
   }
 
   async function sendPayload(payload) {
-    const res = await fetch(ZAPIER_WEBHOOK_URL, {
+    // No Content-Type header: the string body goes out as text/plain, a
+    // CORS simple request needing no preflight (Apps Script can't answer
+    // one). The script parses JSON from the raw body instead.
+    const res = await fetch(FILING_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ ...payload, action: 'finalize', token: FILING_TOKEN })
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    // Only a parsed { ok: true } from the backend confirms the record was
+    // actually filed — anything else keeps it queued.
+    let result = null;
+    try { result = JSON.parse(await res.text()); } catch (e) {}
+    if (!result || result.ok !== true) {
+      throw new Error((result && result.error) || 'Backend did not confirm filing');
+    }
     return true;
   }
 
@@ -1645,11 +1666,13 @@
     const recs = n + ' record' + (n > 1 ? 's' : '');
     let text;
     if (!webhookConfigured()) {
-      text = recs + ' saved on this device but not filed yet — filing isn\'t set up (webhook URL not pasted in yet).';
+      text = recs + ' saved on this device but not filed yet — filing isn\'t set up (Apps Script URL not pasted in yet).';
     } else if (navigator.onLine === false) {
       text = recs + ' saved on this device, waiting to be filed — will send automatically when back online.';
     } else {
-      text = recs + ' saved on this device but not filed yet — last send failed; will keep retrying.';
+      const lastErr = q[0] && q[0].lastError;
+      text = recs + ' saved on this device but not filed yet — last send failed'
+        + (lastErr ? ' (' + lastErr + ')' : '') + '; will keep retrying.';
     }
     msg.textContent = text;
     bar.hidden = false;
@@ -1713,7 +1736,7 @@
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
   function clearForm() {
-    ['client', 'date', 'pontoon', 'booking', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
