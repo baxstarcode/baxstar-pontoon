@@ -32,27 +32,44 @@
   .header {
     background: var(--ink);
     color: var(--pearl);
-    padding: 20px 16px;
+    padding: 16px;
     border-bottom: 4px solid var(--red);
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  .logo {
+    display: block;
+    width: 100px;
+    height: auto;
+  }
+  .header-title {
+    text-align: left;
+    border-left: 1px solid #3f3f46;
+    padding-left: 16px;
   }
   .brand {
     font-family: 'Barlow Condensed', sans-serif;
     font-weight: 800;
-    font-size: 28px;
+    font-size: 24px;
     letter-spacing: 2px;
     text-transform: uppercase;
     margin: 0;
     color: var(--pearl);
   }
-  .brand .accent { color: var(--red); }
   .subtitle {
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 13px;
     letter-spacing: 3px;
     text-transform: uppercase;
     color: var(--bone);
-    margin-top: 4px;
+    margin-top: 2px;
+  }
+  @media (min-width: 768px) {
+    .logo { width: 200px; }
+    .brand { font-size: 32px; }
+    .subtitle { font-size: 16px; }
   }
 
   /* Sticky alert banners */
@@ -600,7 +617,6 @@
 
   /* Small screens */
   @media (max-width: 480px) {
-    .brand { font-size: 24px; }
     .row { grid-template-columns: 1fr; }
     .section-header { font-size: 18px; padding: 12px 14px; }
   }
@@ -619,8 +635,11 @@
 </div>
 
 <div class="header">
-  <h1 class="brand">Baxstar <span class="accent">Outdoors</span></h1>
-  <div class="subtitle">Pontoon Check Out / Check In</div>
+  <img class="logo" src="baxstar_outdoors_logo_white.svg" alt="Baxstar Outdoors">
+  <div class="header-title">
+    <h1 class="brand">Pontoon</h1>
+    <div class="subtitle">Check Out / Check In</div>
+  </div>
 </div>
 
 <div class="container">
