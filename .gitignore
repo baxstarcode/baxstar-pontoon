@@ -1,0 +1,5 @@
+# OS junk
+.DS_Store
+
+# Headless Chrome scratch profiles created by the .devtest harness
+.devtest/profile*/

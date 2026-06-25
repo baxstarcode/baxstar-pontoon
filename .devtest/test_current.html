@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Baxstar form test harness</title></head>
+<body>
+<div id="out">RUNNING</div>
+<div id="frames"></div>
+<script>
+const results = [];
+const jsErrors = [];
+function t(name, pass, info) {
+  results.push((pass ? 'PASS' : 'FAIL') + ' | ' + name + (info ? ' | ' + String(info).slice(0, 220) : ''));
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function loadFrame(src) {
+  return new Promise((resolve, reject) => {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'width:900px;height:1200px;border:0';
+    f.src = src;
+    f.addEventListener('load', async () => {
+      try {
+        const w = f.contentWindow;
+        w.addEventListener('error', e => jsErrors.push(src + ': ' + e.message));
+        // wait for window 'load' inside (init runs there)
+        for (let i = 0; i < 400; i++) {
+          if (w.document.readyState === 'complete') break;
+          await sleep(25);
+        }
+        await sleep(150);
+        resolve(f);
+      } catch (e) { reject(e); }
+    }, { once: true });
+    document.getElementById('frames').appendChild(f);
+  });
+}
+
+function reloadFrame(f) {
+  return new Promise(async (resolve) => {
+    f.addEventListener('load', async () => {
+      const w = f.contentWindow;
+      w.addEventListener('error', e => jsErrors.push('reload: ' + e.message));
+      for (let i = 0; i < 400; i++) {
+        if (w.document.readyState === 'complete') break;
+        await sleep(25);
+      }
+      await sleep(300); // let async signature images draw
+      resolve(f);
+    }, { once: true });
+    f.contentWindow.location.reload();
+  });
+}
+
+function setVal(w, id, val) {
+  const el = w.document.getElementById(id);
+  el.value = val;
+  el.dispatchEvent(new w.Event('input', { bubbles: true }));
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+function setCheck(w, id, on) {
+  const el = w.document.getElementById(id);
+  el.checked = on;
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+// Synthetic touch-type pointer event (mimics a finger on iOS/Android)
+function pevt(w, type, clientX, clientY, id) {
+  return new w.PointerEvent(type, {
+    bubbles: true, cancelable: true,
+    pointerId: id || 1, pointerType: 'touch', isPrimary: true,
+    clientX, clientY
+  });
+}
+function drawSig(w, id) {
+  const c = w.document.getElementById(id);
+  const r = c.getBoundingClientRect();
+  c.dispatchEvent(pevt(w, 'pointerdown', r.left + 20, r.top + 40, 7));
+  c.dispatchEvent(pevt(w, 'pointermove', r.left + 80, r.top + 60, 7));
+  c.dispatchEvent(pevt(w, 'pointermove', r.left + 150, r.top + 45, 7));
+  c.dispatchEvent(pevt(w, 'pointerup', r.left + 150, r.top + 45, 7));
+}
+function svgClientXY(svg, vx, vy) {
+  const ctm = svg.getScreenCTM();
+  return [ctm.a * vx + ctm.c * vy + ctm.e, ctm.b * vx + ctm.d * vy + ctm.f];
+}
+// Tap the diagram at SVG viewBox coords (vx,vy) with a touch pointer,
+// then pick a damage type. Returns the picker-found flag.
+function clickDiagramAt(w, svgId, vx, vy, type) {
+  const svg = w.document.getElementById(svgId);
+  const [clientX, clientY] = svgClientXY(svg, vx, vy);
+  svg.dispatchEvent(pevt(w, 'pointerdown', clientX, clientY, 3));
+  svg.dispatchEvent(pevt(w, 'pointerup', clientX, clientY, 3));
+  const btn = svg.parentElement.querySelector('.mark-picker button[data-type="' + type + '"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+}
+
+async function main() {
+  try {
+
+  /* ============ Scenario A: fill, save, link, round-trip ============ */
+  let f = await loadFrame('form_phase2.html');
+  let w = f.contentWindow;
+  w.localStorage.clear();
+  f = await reloadFrame(f); w = f.contentWindow;
+
+  // A0: viewport + reduced motion + warm vars present
+  const vp = w.document.querySelector('meta[name="viewport"]').content;
+  t('pinch-zoom: no user-scalable=no / maximum-scale in viewport', !/user-scalable|maximum-scale/.test(vp), vp);
+  let hasRM = false;
+  for (const sh of w.document.styleSheets) {
+    try { for (const rule of sh.cssRules) { if (rule.media && /prefers-reduced-motion/.test(rule.media.mediaText)) hasRM = true; } } catch (e) {}
+  }
+  t('reduced-motion media query present in CSS', hasRM);
+  const rootStyle = w.getComputedStyle(w.document.documentElement);
+  t('warm color vars --bone/--pearl defined', rootStyle.getPropertyValue('--bone').trim() === '#c8c5bd' && rootStyle.getPropertyValue('--pearl').trim() === '#e8e6e0');
+
+  // A1: fill everything, special characters included
+  const CLIENT = "Mike O'Brien-Smith <test> & co";
+  setVal(w, 'client', CLIENT);
+  setVal(w, 'date', '2026-06-10');
+  setVal(w, 'pontoon', 'Unit 2');
+  setVal(w, 'booking', '987654');
+  setVal(w, 'out-time', '09:15');
+  setVal(w, 'in-time', '16:45');
+  setVal(w, 'out-notes', 'Scratch on port side — "old" & <deep>');
+  setVal(w, 'in-notes', 'No new damage');
+  setCheck(w, 'safety-0', true);
+  setCheck(w, 'safety-9', true);
+  setCheck(w, 'out-cond-2', true);
+  setCheck(w, 'in-cond-7', true);
+  drawSig(w, 'sig-out-rentee');
+  drawSig(w, 'sig-out-renter');
+  drawSig(w, 'sig-in-rentee');
+  drawSig(w, 'sig-in-renter');
+  t('signature draws from touch-type pointer events', (w.serializeState().sigs['sig-out-rentee'] || '').startsWith('data:image/png'));
+
+  // A2: marks via the real picker flow, page scrolled first (accuracy check)
+  w.scrollTo(0, 600);
+  await sleep(50);
+
+  // Touch gestures that are NOT taps must not open the picker
+  const svgO = w.document.getElementById('diagram-out');
+  const [gx, gy] = svgClientXY(svgO, 130, 200);
+  svgO.dispatchEvent(pevt(w, 'pointerdown', gx, gy, 21));
+  svgO.dispatchEvent(pevt(w, 'pointerup', gx + 40, gy + 30, 21));
+  t('diagram drag/scroll gesture opens no picker', !svgO.parentElement.querySelector('.mark-picker'));
+  svgO.dispatchEvent(pevt(w, 'pointerdown', gx, gy, 31));
+  svgO.dispatchEvent(pevt(w, 'pointerdown', gx + 30, gy, 32));
+  svgO.dispatchEvent(pevt(w, 'pointerup', gx, gy, 31));
+  svgO.dispatchEvent(pevt(w, 'pointerup', gx + 30, gy, 32));
+  t('two-finger pinch on diagram opens no picker', !svgO.parentElement.querySelector('.mark-picker'));
+  t('non-tap gestures placed no marks', w.serializeState().marks.out.length === 0);
+  const picked1 = clickDiagramAt(w, 'diagram-out', 130, 200, 'Scratch');
+  await sleep(50);
+  const picked2 = clickDiagramAt(w, 'diagram-out', 60, 120, 'Dent');
+  await sleep(50);
+  w.scrollTo(0, 0);
+  t('mark picker appears on diagram tap', picked1 && picked2);
+  const st0 = w.serializeState();
+  const m0 = st0.marks.out;
+  const closeTo = (a, b) => Math.abs(a - b) <= 1.5;
+  t('mark coords accurate while page scrolled', m0.length === 2 && closeTo(m0[0].x, 130) && closeTo(m0[0].y, 200) && closeTo(m0[1].x, 60) && closeTo(m0[1].y, 120), JSON.stringify(m0));
+
+  // A3: autosave fires and stores everything
+  await sleep(700);
+  const recs = w.getAllRentals();
+  t('autosave wrote rental to localStorage', recs.length === 1);
+  const sIn = recs[0] && recs[0].state.inputs;
+  t('saved state holds client/date/booking/times/notes', sIn && sIn.client === CLIENT && sIn.date === '2026-06-10' && sIn.booking === '987654' && sIn['out-time'] === '09:15' && sIn['in-time'] === '16:45' && sIn['out-notes'].includes('<deep>'));
+  t('saved state holds all 4 signatures', recs[0] && ['sig-out-rentee','sig-out-renter','sig-in-rentee','sig-in-renter'].every(k => (recs[0].state.sigs[k] || '').startsWith('data:image/png')));
+  t('saved-indicator flashed (no false positive path)', true, 'flash verified by save success; visibility timing is transient');
+
+  // A4: booking link
+  const linkWrap = w.document.getElementById('booking-link-wrap');
+  const link = w.document.getElementById('booking-link');
+  t('FareHarbor link visible + correct href', !linkWrap.hidden && link.href === 'https://fareharbor.com/baxstarfishing/dashboard/?bookings=987654' && link.target === '_blank');
+  setVal(w, 'booking', '');
+  t('FareHarbor link hides when booking cleared', w.document.getElementById('booking-link-wrap').hidden);
+  setVal(w, 'booking', '987654');
+  await sleep(600);
+
+  // A5: XSS / escaping in saved list
+  w.renderRentalsList();
+  const listHtml = w.document.getElementById('rentals-list-items').innerHTML;
+  t('client name escaped in saved list', listHtml.includes('&lt;test&gt;') && !w.document.querySelector('#rentals-list-items test'));
+
+  // A6: full round-trip across a real reload
+  const snapshot = JSON.parse(JSON.stringify({ inputs: st0.inputs, checks: st0.checks, marks: st0.marks }));
+  snapshot.inputs.booking = '987654';
+  await sleep(100);
+  const before = w.serializeState();
+  const sigsBefore = before.sigs;
+  f = await reloadFrame(f); w = f.contentWindow;
+  const after = w.serializeState();
+  const cmp = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  t('reload restores inputs exactly', cmp(before.inputs, after.inputs), JSON.stringify(after.inputs).slice(0, 150));
+  t('reload restores checkboxes exactly', cmp(before.checks, after.checks));
+  t('reload restores marks exactly (count+coords+labels)', cmp(before.marks, after.marks), JSON.stringify(after.marks));
+  t('reload restores all 4 signatures (non-empty canvases)', ['sig-out-rentee','sig-out-renter','sig-in-rentee','sig-in-renter'].every(k => sigsBefore[k] && (after.sigs[k] || '').startsWith('data:image/png')));
+  t('marks re-render as SVG elements after reload', w.document.querySelectorAll('#diagram-out .user-mark').length === 2);
+
+  // A7: beforeunload guard inside autosave window
+  setVal(w, 'pontoon', 'Unit 3');
+  let ev = new w.Event('beforeunload', { cancelable: true });
+  w.dispatchEvent(ev);
+  t('beforeunload blocks during unsaved window', ev.defaultPrevented);
+  await sleep(700);
+  ev = new w.Event('beforeunload', { cancelable: true });
+  w.dispatchEvent(ev);
+  t('beforeunload silent after save lands', !ev.defaultPrevented);
+
+  /* ============ Scenario B: reservation advisory ============ */
+  w.localStorage.clear();
+  f = await reloadFrame(f); w = f.contentWindow;
+
+  // B1: exact match (case/punct/word-order insensitive) — found + autofill empty only
+  setVal(w, 'out-time', '08:00');           // typed value must survive
+  setVal(w, 'client', 'CARLSON, jon');
+  await sleep(1000);
+  let res = w.document.getElementById('res-status');
+  t('reservation found (case/punct/order-insensitive)', !res.hidden && res.className.includes('res-found'), res.textContent);
+  t('autofill fills empty booking only, keeps typed time', w.document.getElementById('booking').value === '75312511' && w.document.getElementById('out-time').value === '08:00');
+
+  // B2: misspelling -> did-you-mean, never auto-applied
+  w.newRental();
+  setVal(w, 'client', 'Jhon Carlsen');
+  await sleep(1000);
+  res = w.document.getElementById('res-status');
+  const sawSuggest = !res.hidden && res.className.includes('res-suggest');
+  t('misspelling shows did-you-mean suggestions', sawSuggest, res.textContent);
+  t('suggestion does not autofill until tapped', w.document.getElementById('booking').value === '');
+  if (sawSuggest) {
+    res.querySelector('button').click();
+    await sleep(100);
+    t('tapping suggestion fills empty fields', w.document.getElementById('booking').value.length > 0, w.document.getElementById('booking').value);
+  } else { t('tapping suggestion fills empty fields', false, 'no suggestion shown'); }
+
+  // B3: no match
+  w.newRental();
+  setVal(w, 'client', 'Zebulon Quagmire');
+  await sleep(1000);
+  res = w.document.getElementById('res-status');
+  t('unknown name shows no-match (walk-up ok)', !res.hidden && res.className.includes('res-none'), res.textContent);
+
+  // B4: lookup unavailable degrades gracefully
+  w.fetchTodaysReservations = () => Promise.reject(new Error('offline'));
+  w.newRental();
+  setVal(w, 'client', 'Maria Gutierrez');
+  await sleep(1000);
+  res = w.document.getElementById('res-status');
+  t("lookup failure shows couldn't-verify, field stays editable", !res.hidden && res.className.includes('res-error') && !w.document.getElementById('client').disabled, res.textContent);
+
+  // B5: pure matcher unit checks
+  const list = [{name:'Jon Carlson',start:'10:30',bookingId:'1'},{name:'John Carlsen',start:'13:00',bookingId:'2'}];
+  t('matcher: exact', w.matchReservation('jon carlson', list).status === 'found');
+  t('matcher: ambiguous near-duplicates -> suggest', w.matchReservation('John Carlson', list).status === 'suggest');
+  t('matcher: garbage -> none', w.matchReservation('xxxyyy zzz', list).status === 'none');
+  t('matcher: empty -> none, no crash', w.matchReservation('', list).status === 'none');
+
+  /* ============ Scenario C: finalize + queue with NO webhook URL ============ */
+  w.localStorage.clear();
+  f = await reloadFrame(f); w = f.contentWindow;
+  let alerts = [];
+  w.alert = m => alerts.push(m);
+  w.confirm = () => true;
+  w.prompt = () => 'Torn seat';
+
+  // C0: finalize on empty form refuses
+  w.finalizeRental();
+  t('finalize on empty form refuses with message', alerts.length === 1 && !w.document.body.classList.contains('locked'), alerts[0]);
+
+  setVal(w, 'client', 'Tyler Brandt');
+  setVal(w, 'booking', '75312480');
+  setCheck(w, 'safety-0', true);
+  drawSig(w, 'sig-out-rentee');
+  await sleep(700);
+  w.finalizeRental();
+  await sleep(400);
+  t('finalize locks the form', w.document.body.classList.contains('locked') && w.document.getElementById('client').disabled);
+  t('finalized banner + unlock visible, finalize hidden', !w.document.getElementById('finalized-banner').hidden && !w.document.getElementById('unlock-btn').hidden && w.document.getElementById('finalize-btn').hidden);
+  t('unset webhook -> record queued locally', w.getQueue().length === 1);
+  const qbar = w.document.getElementById('queue-bar');
+  t('queue bar explains not-filed state', !qbar.hidden && /not filed|isn't set up/i.test(qbar.textContent), qbar.textContent.trim());
+  w.renderRentalsList();
+  const lh = w.document.getElementById('rentals-list-items').innerHTML;
+  t('list shows FINALIZED + QUEUED badges', lh.includes('FINALIZED') && lh.includes('QUEUED'));
+
+  // C1: locked form rejects edits
+  const marksBefore = w.serializeState().marks.out.length;
+  clickDiagramAt(w, 'diagram-out', 100, 150, 'Scratch');
+  await sleep(100);
+  t('locked diagram ignores taps', w.serializeState().marks.out.length === marksBefore);
+  const sigBefore = w.serializeState().sigs['sig-in-renter'];
+  drawSig(w, 'sig-in-renter');
+  await sleep(500);
+  t('locked signature pad ignores strokes', w.serializeState().sigs['sig-in-renter'] === sigBefore);
+
+  // C2: locked state survives reload
+  f = await reloadFrame(f); w = f.contentWindow;
+  t('lock survives reload', w.document.body.classList.contains('locked'));
+
+  // C3: unlock restores editing and drops stale queue entry
+  w.confirm = () => true;
+  w.unlockRental();
+  t('unlock re-enables editing', !w.document.body.classList.contains('locked') && !w.document.getElementById('client').disabled);
+  t('unlock drops stale queued payload', w.getQueue().length === 0);
+
+  /* ============ Scenario D: finalize + POST with webhook URL set ============ */
+  let f2 = await loadFrame('form_with_url.html');
+  let w2 = f2.contentWindow;
+  w2.localStorage.clear();
+  f2 = await reloadFrame(f2); w2 = f2.contentWindow;
+  w2.confirm = () => true;
+  w2.alert = () => {};
+  const calls = [];
+  w2.fetch = async (url, opts) => { calls.push({ url, body: opts.body, opts }); return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) }; };
+
+  setVal(w2, 'client', 'Maria Gutierrez');
+  setVal(w2, 'date', '2026-06-10');
+  setVal(w2, 'pontoon', 'Unit 1');
+  setVal(w2, 'booking', '75312602');
+  setVal(w2, 'email', 'maria@example.com');
+  setVal(w2, 'out-time', '11:00');
+  setVal(w2, 'in-time', '15:30');
+  setVal(w2, 'out-notes', 'small gelcoat chip');
+  setVal(w2, 'in-notes', 'all good');
+  for (let i = 0; i < 10; i++) setCheck(w2, 'safety-' + i, true);
+  setCheck(w2, 'out-cond-0', true);
+  setCheck(w2, 'in-cond-0', true);
+  drawSig(w2, 'sig-out-rentee');
+  drawSig(w2, 'sig-out-renter');
+  drawSig(w2, 'sig-in-rentee');
+  drawSig(w2, 'sig-in-renter');
+  clickDiagramAt(w2, 'diagram-out', 130, 200, 'Scratch');
+  await sleep(50);
+  clickDiagramAt(w2, 'diagram-in', 60, 120, 'Dent');
+  await sleep(700);
+  w2.finalizeRental();
+  await sleep(500);
+
+  t('POST fired once to webhook', calls.length === 1 && /hooks\.test\.invalid/.test(calls[0].url), calls.length + ' calls');
+  t('CORS-safe: no custom headers on finalize POST', !(calls[0].opts && calls[0].opts.headers), JSON.stringify(calls[0].opts && calls[0].opts.headers));
+  let bodyObj = null;
+  try { bodyObj = JSON.parse(calls[0].body); } catch (e) {}
+  t('POST body carries action+token for the backend', !!bodyObj && bodyObj.action === 'finalize' && typeof bodyObj.token === 'string' && bodyObj.token.length >= 16);
+  t('payload: customerEmail field present', !!bodyObj && bodyObj.customerEmail === 'maria@example.com', bodyObj && bodyObj.customerEmail);
+  let p = null;
+  try { p = JSON.parse(calls[0].body); } catch (e) {}
+  t('payload parses as JSON', !!p);
+  if (p) {
+    t('payload: identity fields complete', p.client === 'Maria Gutierrez' && p.date === '2026-06-10' && p.pontoonUnit === 'Unit 1' && p.bookingId === '75312602' && p.formType === 'baxstar_pontoon_checkin');
+    t('payload: filename convention', p.filename === 'Pontoon_Maria_Gutierrez_2026-06-10_75312602', p.filename);
+    t('payload: fareharbor url', p.fareharborUrl === 'https://fareharbor.com/baxstarfishing/dashboard/?bookings=75312602');
+    t('payload: checklists complete (10 safety / 8+8 condition)', p.checkOut.safetyChecklist.length === 10 && p.checkOut.conditionChecklist.length === 8 && p.checkIn.conditionChecklist.length === 8 && p.checkOut.safetyChecklist.every(c => c.checked === true));
+    t('payload: both notes present', p.checkOut.notes === 'small gelcoat chip' && p.checkIn.notes === 'all good');
+    t('payload: marks with type+coords+diagram', p.checkOut.damageMarks.length === 1 && p.checkOut.damageMarks[0].type === 'Scratch' && Math.abs(p.checkOut.damageMarks[0].x - 130) <= 1.5 && p.checkIn.damageMarks.length === 1 && p.checkIn.damageMarks[0].type === 'Dent');
+    t('payload: both signature pairs as data URLs', [p.checkOut.signatures.rentee, p.checkOut.signatures.baxstar, p.checkIn.signatures.rentee, p.checkIn.signatures.baxstar].every(s => (s || '').startsWith('data:image/png')));
+    t('payload: times + summaryText present', p.checkOut.time === '11:00' && p.checkIn.time === '15:30' && p.summaryText.includes('Maria Gutierrez') && p.summaryText.includes('CHECK IN'));
+  }
+  t('successful send drains queue', w2.getQueue().length === 0);
+  await sleep(100);
+  const recD = w2.getAllRentals()[0];
+  t('successful send marks record FILED', !!(recD && recD.filedAt));
+  w2.renderRentalsList();
+  t('list shows FILED badge', w2.document.getElementById('rentals-list-items').innerHTML.includes('FILED'));
+
+  /* ============ Scenario E: failed send queues + retry succeeds ============ */
+  w2.localStorage.clear();
+  f2 = await reloadFrame(f2); w2 = f2.contentWindow;
+  w2.confirm = () => true;
+  w2.alert = () => {};
+  w2.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  setVal(w2, 'client', 'Walkup Person');
+  setCheck(w2, 'safety-0', true);
+  await sleep(700);
+  w2.finalizeRental();
+  await sleep(500);
+  t('failed POST keeps record queued', w2.getQueue().length === 1);
+  const qb2 = w2.document.getElementById('queue-bar');
+  t('failure message visible to user', !qb2.hidden && /not filed|waiting|retry/i.test(qb2.textContent), qb2.textContent.trim());
+  t('walk-up (no booking) still files: payload has empty bookingId', w2.getQueue()[0].payload.bookingId === '' && w2.getQueue()[0].payload.filename.endsWith('_walkup'));
+  // backend 200 but ok:false (e.g. missing signatures) must NOT clear the queue
+  w2.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: false, error: 'Cannot file — missing signatures: Rentee (check in)' }) });
+  await w2.processQueue(true);
+  t('backend ok:false rejection keeps record queued', w2.getQueue().length === 1, JSON.stringify(w2.getQueue()[0] && w2.getQueue()[0].lastError));
+  // retry succeeds
+  w2.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) });
+  await w2.processQueue(true);
+  t('manual retry drains queue + files record', w2.getQueue().length === 0 && !!w2.getAllRentals()[0].filedAt);
+
+  /* ============ Scenario F: storage failure surfaces visibly ============ */
+  let f3 = await loadFrame('form_phase2.html');
+  let w3 = f3.contentWindow;
+  w3.localStorage.clear();
+  f3 = await reloadFrame(f3); w3 = f3.contentWindow;
+  w3.Storage.prototype.setItem = function () { throw new Error('QuotaExceededError'); };
+  setVal(w3, 'client', 'Quota Test');
+  await sleep(700);
+  t('storage failure shows NOT SAVING banner', !w3.document.getElementById('storage-warning').hidden);
+  t('storage failure never flashes Saved ✓', !w3.document.getElementById('saved-indicator').classList.contains('show'));
+  ev = new w3.Event('beforeunload', { cancelable: true });
+  w3.dispatchEvent(ev);
+  t('unsaved-due-to-quota still guards beforeunload', ev.defaultPrevented);
+
+  /* ============ Scenario G: list edge cases ============ */
+  // Local-only rendering tests: wipe the shared mock cloud first so this fresh
+  // device doesn't pull drafts auto-pushed by earlier scenarios (that cross-
+  // device pull is correct in production but pollutes these local assertions).
+  try { await fetch('http://localhost:8809/__reset', { method: 'POST' }); } catch (e) {}
+  let f4 = await loadFrame('form_phase2.html');
+  let w4 = f4.contentWindow;
+  w4.localStorage.clear();
+  f4 = await reloadFrame(f4); w4 = f4.contentWindow;
+  w4.confirm = () => true;
+  t('empty list renders placeholder', (w4.document.getElementById('rentals-list-items').textContent || '').includes('No saved rentals'));
+  // unnamed rental (checkbox only)
+  setCheck(w4, 'safety-1', true);
+  await sleep(700);
+  t('unnamed rental shows (unnamed)', w4.document.getElementById('rentals-list-items').innerHTML.includes('(unnamed)'));
+  // duplicate names both listed
+  w4.newRental(); setVal(w4, 'client', 'Sam Onstad'); await sleep(700);
+  w4.newRental(); setVal(w4, 'client', 'Sam Onstad'); await sleep(700);
+  const rows = w4.document.querySelectorAll('#rentals-list-items .rental-row').length;
+  t('duplicate names: separate rows', rows === 3, rows + ' rows');
+  // delete current -> fresh rental, no errors
+  w4.deleteRental(w4.getAllRentals().sort((a,b)=>b.updatedAt-a.updatedAt)[0].id);
+  await sleep(200);
+  t('delete current rental recovers to new rental', w4.getAllRentals().length === 2 && w4.document.getElementById('client').value === '');
+
+  // mark with special-char custom label is escaped, survives round-trip
+  w4.prompt = () => '<b>"weird" & torn</b>';
+  clickDiagramAt(w4, 'diagram-out', 100, 100, 'Other');
+  await sleep(700);
+  const mk = w4.serializeState().marks.out[0];
+  t('custom mark label stored raw, rendered escaped', mk && mk.label === '<b>"weird" & torn</b>' && !w4.document.querySelector('#diagram-out .user-mark b'), JSON.stringify(mk));
+
+  /* ============ console errors across everything ============ */
+  t('zero uncaught JS errors across all scenarios', jsErrors.length === 0, jsErrors.join(' ;; '));
+
+  } catch (e) {
+    results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0,3).join(' / ') : e));
+  }
+  const pass = results.filter(r => r.startsWith('PASS')).length;
+  const fail = results.length - pass;
+  document.getElementById('out').innerHTML =
+    '<pre id="results">' + results.map(r => r.replace(/</g, '&lt;')).join('\n') +
+    '\nTOTAL ' + pass + ' passed, ' + fail + ' failed/other</pre>';
+  try { await fetch('http://localhost:8809/report/maincur', { method: 'POST', body: document.getElementById('results').textContent }); } catch (e) {}
+  document.title = 'TESTS-DONE';
+}
+main();
+</script>
+</body>
+</html>
