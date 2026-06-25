@@ -414,6 +414,30 @@
     font-weight: 600;
     color: #18181b;
   }
+  /* Cloud-sync status line (handoff-safe signal) */
+  .sync-status {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: #71717a;
+  }
+  .sync-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #a1a1aa;
+    flex-shrink: 0;
+  }
+  .sync-status.is-synced { color: #166534; }
+  .sync-status.is-synced .sync-dot { background: #16a34a; }
+  .sync-status.is-syncing { color: #92400e; }
+  .sync-status.is-syncing .sync-dot { background: #d97706; }
+  .sync-status.is-offline { color: #9a3412; }
+  .sync-status.is-offline .sync-dot { background: #b45309; }
+  .handoff-actions { background: #fafafa; padding-top: 0; }
+  .handoff-actions .session-btn { font-size: 12px; }
   .session-actions {
     display: flex;
     gap: 8px;
@@ -480,6 +504,7 @@
   .badge.done { background: #16a34a; }
   .badge.dark { background: #27272a; }
   .badge.amber { background: #b45309; }
+  .badge.cloud { background: #1d4ed8; }
   .rental-meta {
     font-size: 12px;
     color: #71717a;
@@ -649,10 +674,16 @@
     <div class="session-current">
       <div class="session-label">Current Rental</div>
       <div class="session-name" id="current-label">New rental — start filling out</div>
+      <div class="sync-status" id="sync-status" hidden><span class="sync-dot" id="sync-dot"></span><span id="sync-text">Synced</span></div>
     </div>
     <div class="session-actions">
       <button class="session-btn" onclick="toggleRentalsList()">Saved (<span id="rentals-count">0</span>)</button>
       <button class="session-btn primary" onclick="newRental()">+ New Rental</button>
+    </div>
+    <div class="session-actions handoff-actions">
+      <button class="session-btn" onclick="exportDraftHandoff()">⇪ Hand off draft</button>
+      <button class="session-btn" onclick="document.getElementById('import-draft-input').click()">⇩ Import draft</button>
+      <input type="file" id="import-draft-input" accept="application/json,.json" hidden onchange="importDraftHandoff(this.files && this.files[0]); this.value='';">
     </div>
     <div class="rentals-list" id="rentals-list">
       <div id="rentals-list-items"></div>
@@ -903,6 +934,16 @@
   const STORAGE_KEY = 'baxstar_pontoon_rentals';
   const ACTIVE_KEY = 'baxstar_active_rental_id';
   const QUEUE_KEY = 'baxstar_pontoon_send_queue';
+  const DRAFT_QUEUE_KEY = 'baxstar_pontoon_draft_queue';
+
+  // Cloud-draft sync state (Phase 2). cloudDrafts is the last lightweight list
+  // pulled from the backend (rentalIds NOT also held locally appear as CLOUD
+  // rows in the Saved panel). lastCloudOk tracks whether the most recent push
+  // confirmed, so the sync line can read "Synced ✓".
+  let cloudDrafts = [];
+  let cloudPushTimer = null;
+  let draftQueueBusy = false;
+  let lastCloudOk = false;
 
   // Per-diagram marks tracking
   const marksData = { 'diagram-out': [], 'diagram-in': [] };
@@ -1439,8 +1480,13 @@
     updateBookingLink();
   }
 
+  // The date field is auto-filled to today on every new rental, so a lone date
+  // does NOT make a rental "real" — otherwise every freshly-opened blank form
+  // would persist (and, in Phase 2, sync to the cloud) as a phantom "(unnamed)"
+  // entry. finalizeRental already encodes this same rule by stripping the date
+  // before its own emptiness check.
   function hasAnyContent(state) {
-    return Object.values(state.inputs).some(v => v && String(v).trim()) ||
+    return Object.entries(state.inputs).some(([id, v]) => id !== 'date' && v && String(v).trim()) ||
       Object.values(state.checks).some(v => v) ||
       (state.marks?.out?.length > 0) || (state.marks?.in?.length > 0) ||
       Object.values(state.sigs).some(v => v);
@@ -1458,9 +1504,12 @@
 
     if (!hasAnyContent(state)) {
       if (idx !== -1 && !rentals[idx].finalized) {
+        const wasSynced = !!rentals[idx].cloudSyncedAt;
         rentals.splice(idx, 1);
         saveAllRentals(rentals);
         renderRentalsList();
+        // If this emptied rental had ever reached the cloud, remove it there too.
+        if (wasSynced) { enqueueDraftOp(currentRentalId, 'delete'); processDraftQueue(); }
       }
       updateCurrentLabel();
       dirty = false;
@@ -1477,6 +1526,8 @@
     if (ok) {
       dirty = false;
       flashSavedIndicator();
+      const saved = getAllRentals().find(r => r.id === currentRentalId);
+      if (saved && !saved.finalized) scheduleCloudPush(currentRentalId);
     }
     renderRentalsList();
     updateCurrentLabel();
@@ -1678,6 +1729,286 @@
     bar.hidden = false;
   }
 
+  /* ---- CLOUD DRAFT SYNC (Phase 2) ------------------------------------------
+     In-progress rentals are mirrored to the backend's Drive "Pontoon Drafts"
+     folder so any device can list and resume an open rental. This layer is
+     offline-first: local storage stays the source of truth on the device,
+     cloud pushes ride their own retry queue, and a queued push auto-fires on
+     reconnect and reload — exactly like the finalize send queue. The form
+     degrades cleanly if the backend hasn't been updated with the Phase 2
+     actions yet: pushes just fail and stay queued, drafts remain local. */
+  let cloudReloadPending = false;
+
+  function draftMetaFromRental(r) {
+    const inp = (r && r.state && r.state.inputs) || {};
+    const sigs = (r && r.state && r.state.sigs) || {};
+    return {
+      client: (inp.client || '').trim(),
+      date: inp.date || '',
+      pontoon: (inp.pontoon || '').trim(),
+      hasCheckIn: !!(inp['in-time'] || sigs['sig-in-rentee'] || sigs['sig-in-renter'])
+    };
+  }
+
+  function getDraftQueue() {
+    try { return JSON.parse(localStorage.getItem(DRAFT_QUEUE_KEY)) || []; }
+    catch { return []; }
+  }
+  function setDraftQueue(q) {
+    try { localStorage.setItem(DRAFT_QUEUE_KEY, JSON.stringify(q)); return true; }
+    catch (e) { setStorageWarning(true); return false; }
+  }
+  // One pending op per rental — a later op supersedes an earlier one (a delete
+  // cancels a pending save and vice-versa).
+  function enqueueDraftOp(rentalId, op) {
+    if (!rentalId) return;
+    const q = getDraftQueue().filter(e => e.rentalId !== rentalId);
+    q.push({ rentalId, op, queuedAt: Date.now(), attempts: 0 });
+    setDraftQueue(q);
+    updateSyncIndicator();
+  }
+
+  // Debounced cloud push, coarser than the 400ms local save: signatures are
+  // heavy, so we wait for edits to settle before sending the whole state.
+  function scheduleCloudPush(rentalId) {
+    if (!rentalId) return;
+    clearTimeout(cloudPushTimer);
+    cloudPushTimer = setTimeout(() => {
+      enqueueDraftOp(rentalId, 'save');
+      processDraftQueue();
+    }, 2500);
+  }
+
+  // Shared POST for the draft actions. Same CORS-simple text/plain pattern as
+  // sendPayload; only a parsed { ok: true } counts as success.
+  async function sendDraftAction(body) {
+    const res = await fetch(FILING_URL, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, token: FILING_TOKEN })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    let result = null;
+    try { result = JSON.parse(await res.text()); } catch (e) {}
+    if (!result || result.ok !== true) {
+      throw new Error((result && result.error) || 'Backend did not confirm');
+    }
+    return result;
+  }
+
+  function recordCloudSynced(rentalId, cloudUpdatedAt) {
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === rentalId);
+    if (idx === -1) return;
+    rentals[idx].cloudUpdatedAt = cloudUpdatedAt || rentals[idx].updatedAt;
+    rentals[idx].cloudSyncedAt = Date.now();
+    saveAllRentals(rentals);
+  }
+
+  async function processDraftQueue(manual) {
+    if (draftQueueBusy) return;
+    if (!webhookConfigured()) { updateSyncIndicator(); return; }
+    if (navigator.onLine === false) { updateSyncIndicator(); return; }
+    draftQueueBusy = true;
+    updateSyncIndicator();
+    try {
+      const queue = getDraftQueue();
+      const remaining = [];
+      for (const entry of queue) {
+        try {
+          if (entry.op === 'delete') {
+            await sendDraftAction({ action: 'deleteDraft', rentalId: entry.rentalId });
+          } else {
+            const r = getAllRentals().find(x => x.id === entry.rentalId);
+            if (!r) continue;            // gone locally — nothing to push
+            if (r.finalized) continue;   // finalize path cleans up the cloud draft
+            const meta = draftMetaFromRental(r);
+            const res = await sendDraftAction({
+              action: 'saveDraft',
+              rentalId: r.id,
+              updatedAt: r.updatedAt || Date.now(),
+              client: meta.client, date: meta.date, pontoon: meta.pontoon,
+              hasCheckIn: meta.hasCheckIn,
+              state: r.state
+            });
+            recordCloudSynced(r.id, res.updatedAt);
+          }
+          lastCloudOk = true;
+        } catch (err) {
+          entry.attempts = (entry.attempts || 0) + 1;
+          entry.lastError = String((err && err.message) || err);
+          remaining.push(entry);
+          lastCloudOk = false;
+        }
+      }
+      setDraftQueue(remaining);
+    } finally {
+      draftQueueBusy = false;
+      updateSyncIndicator();
+      renderRentalsList();
+    }
+  }
+
+  // Pull the lightweight list of cloud drafts (no signatures) for the picker.
+  async function fetchCloudDrafts() {
+    if (!webhookConfigured() || navigator.onLine === false) return;
+    try {
+      const res = await sendDraftAction({ action: 'getActive' });
+      cloudDrafts = Array.isArray(res.drafts) ? res.drafts : [];
+      maybeWarnNewerCloud();
+      renderRentalsList();
+    } catch (e) { /* offline or backend not yet updated — keep the local list */ }
+  }
+
+  async function fetchCloudDraftFull(rentalId) {
+    const res = await sendDraftAction({ action: 'getActive', rentalId });
+    return res.draft;
+  }
+
+  // Open a draft that lives in the cloud (e.g. started on another device).
+  // Adopts the ORIGINAL rentalId locally so later saves upsert the same cloud
+  // file instead of forking a duplicate.
+  async function openCloudDraft(rentalId) {
+    let draft;
+    try { draft = await fetchCloudDraftFull(rentalId); }
+    catch (e) { alert('Could not load that draft from the cloud:\n' + ((e && e.message) || e)); return; }
+    if (!draft || !draft.state) { alert('That cloud draft was empty or unreadable.'); return; }
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(r => r.id === rentalId);
+    const now = Date.now();
+    const rec = {
+      id: rentalId,
+      createdAt: idx === -1 ? (draft.updatedAt || now) : rentals[idx].createdAt,
+      updatedAt: draft.updatedAt || now,
+      state: draft.state,
+      cloudUpdatedAt: draft.updatedAt || now,
+      cloudSyncedAt: now
+    };
+    if (idx === -1) rentals.push(rec); else rentals[idx] = { ...rentals[idx], ...rec };
+    saveAllRentals(rentals);
+    openRental(rentalId);
+  }
+
+  // Non-blocking conflict guard: if another device saved a clearly newer copy
+  // of the rental that's open here, offer to reload rather than silently
+  // clobbering it on the next push. Our own pushes set cloudUpdatedAt to the
+  // cloud stamp, so they don't trip this.
+  function maybeWarnNewerCloud() {
+    if (!currentRentalId || cloudReloadPending) return;
+    const meta = (cloudDrafts || []).find(d => d.rentalId === currentRentalId);
+    if (!meta) return;
+    const local = getAllRentals().find(r => r.id === currentRentalId);
+    if (!local) return;
+    const localStamp = Math.max(local.updatedAt || 0, local.cloudUpdatedAt || 0);
+    if (meta.updatedAt > localStamp + 1500 && !isLocked()) {
+      cloudReloadPending = true;
+      const ok = confirm('A newer version of this rental was saved from another device.\n\n'
+        + 'Reload it now? Your current on-screen view will be replaced by the newer cloud copy.');
+      cloudReloadPending = false;
+      if (ok) openCloudDraft(currentRentalId);
+    }
+  }
+
+  function updateSyncIndicator() {
+    const box = document.getElementById('sync-status');
+    const txt = document.getElementById('sync-text');
+    if (!box || !txt) return;
+    if (!webhookConfigured()) { box.hidden = true; return; }
+    const pending = getDraftQueue().length;
+    box.classList.remove('is-synced', 'is-syncing', 'is-offline');
+    if (navigator.onLine === false) {
+      box.classList.add('is-offline');
+      txt.textContent = pending ? 'Offline — ' + pending + ' waiting to sync' : 'Offline';
+      box.hidden = false;
+    } else if (pending > 0 || draftQueueBusy) {
+      box.classList.add('is-syncing');
+      txt.textContent = 'Syncing to cloud…';
+      box.hidden = false;
+    } else if (lastCloudOk) {
+      box.classList.add('is-synced');
+      txt.textContent = 'Synced to cloud ✓';
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+    }
+  }
+
+  /* ---- DEAD-ZONE PEER-TO-PEER HANDOFF (provisional) ------------------------
+     For the both-phones-offline case: export the current draft as a file
+     (Web Share → AirDrop where supported, else a download) and import one a
+     file received on the other phone. iOS can't register the form as an
+     AirDrop target, so the receiving side picks the file via "Import draft". */
+  function downloadBlob(blob, fname) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  function exportDraftHandoff() {
+    saveNow();
+    const r = getAllRentals().find(x => x.id === currentRentalId);
+    if (!r || !hasAnyContent(r.state || { inputs: {}, checks: {}, sigs: {}, marks: {} })) {
+      alert('Nothing to hand off yet — this rental is empty.');
+      return;
+    }
+    const meta = draftMetaFromRental(r);
+    const bundle = {
+      formType: 'baxstar_pontoon_draft',
+      formVersion: 3,
+      rentalId: r.id,
+      updatedAt: r.updatedAt || Date.now(),
+      client: meta.client, date: meta.date, pontoon: meta.pontoon,
+      hasCheckIn: meta.hasCheckIn,
+      state: r.state
+    };
+    const safe = (meta.client || 'rental').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'rental';
+    const fname = 'PontoonDraft_' + safe + '_' + (meta.date || 'no_date') + '.json';
+    const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
+    let file = null;
+    try { if (typeof File === 'function') file = new File([blob], fname, { type: 'application/json' }); } catch (e) {}
+    if (file && navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      navigator.share({ files: [file], title: 'Pontoon rental draft' })
+        .catch(() => { /* user cancelled or share failed — offer the download */ downloadBlob(blob, fname); });
+    } else {
+      downloadBlob(blob, fname);
+    }
+  }
+
+  function importDraftHandoff(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let bundle;
+      try { bundle = JSON.parse(reader.result); }
+      catch (e) { alert('That file is not a valid draft (could not parse JSON).'); return; }
+      if (!bundle || bundle.formType !== 'baxstar_pontoon_draft' || !bundle.state) {
+        alert('That file is not a Baxstar pontoon draft.'); return;
+      }
+      const rentalId = bundle.rentalId || generateId();
+      const rentals = getAllRentals();
+      const idx = rentals.findIndex(r => r.id === rentalId);
+      const incoming = bundle.updatedAt || Date.now();
+      if (idx !== -1 && (rentals[idx].updatedAt || 0) > incoming) {
+        if (!confirm('You already have a NEWER copy of this rental on this device.\n\n'
+          + 'Replace it with the older imported one anyway?')) return;
+      }
+      const rec = {
+        id: rentalId,
+        createdAt: idx === -1 ? incoming : rentals[idx].createdAt,
+        updatedAt: incoming,
+        state: bundle.state
+      };
+      if (idx === -1) rentals.push(rec); else rentals[idx] = { ...rentals[idx], ...rec };
+      saveAllRentals(rentals);
+      openRental(rentalId);
+      scheduleCloudPush(rentalId);   // get the imported draft into the cloud too
+      alert('Draft imported — opened for editing.');
+    };
+    reader.readAsText(file);
+  }
+
   /* ---- FINALIZE / LOCK ------------------------------------------------------ */
   function setLocked(locked) {
     document.body.classList.toggle('locked', locked);
@@ -1711,9 +2042,14 @@
     }
     const payload = buildPayload(rec);
     enqueueSend(rec.id, payload);
+    // Stop pushing this as an in-progress draft — the finalize send removes the
+    // cloud draft server-side once it confirms. Superseding the pending push
+    // here also avoids re-creating the draft after that deletion (same-day race).
+    setDraftQueue(getDraftQueue().filter(q => q.rentalId !== rec.id));
     setLocked(true);
     renderRentalsList();
     updateQueueUI();
+    updateSyncIndicator();
     processQueue();
     window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }
@@ -1730,8 +2066,13 @@
     // Drop any stale unsent payload — re-finalizing queues a fresh one
     setQueue(getQueue().filter(q => q.rentalId !== currentRentalId));
     setLocked(false);
+    // It's an in-progress draft again — finalize had removed the cloud copy,
+    // so push it back up for cross-device resume.
+    enqueueDraftOp(currentRentalId, 'save');
+    processDraftQueue();
     renderRentalsList();
     updateQueueUI();
+    updateSyncIndicator();
   }
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
@@ -1794,6 +2135,9 @@
     let rentals = getAllRentals();
     rentals = rentals.filter(x => x.id !== id);
     saveAllRentals(rentals);
+    // Remove the cloud draft too so it stops showing on other devices.
+    enqueueDraftOp(id, 'delete');
+    processDraftQueue();
     if (currentRentalId === id) {
       // Drop the id first so newRental's save flush can't resurrect the deleted record
       currentRentalId = null;
@@ -1834,17 +2178,22 @@
     const list = document.getElementById('rentals-list-items');
     if (!list) return;
     const rentals = getAllRentals().sort((a, b) => b.updatedAt - a.updatedAt);
+    const localIds = new Set(rentals.map(r => r.id));
+    // Drafts that exist in the cloud but not on this device — the cross-device
+    // handoff rows (e.g. a checkout started on the other phone).
+    const cloudOnly = (cloudDrafts || []).filter(d => d && d.rentalId && !localIds.has(d.rentalId) && !d.finalized);
     const countEl = document.getElementById('rentals-count');
-    if (countEl) countEl.textContent = rentals.length;
+    if (countEl) countEl.textContent = rentals.length + cloudOnly.length;
 
-    if (rentals.length === 0) {
+    if (rentals.length === 0 && cloudOnly.length === 0) {
       list.innerHTML = '<div style="padding: 16px; color: #71717a; font-size: 13px; text-align: center;">No saved rentals yet</div>';
       return;
     }
 
     const queuedIds = new Set(getQueue().map(q => q.rentalId));
+    const draftSyncing = new Set(getDraftQueue().filter(e => e.op === 'save').map(e => e.rentalId));
 
-    list.innerHTML = rentals.map(r => {
+    const localHtml = rentals.map(r => {
       const s = r.state || {};
       const client = s.inputs?.client || '(unnamed)';
       const date = s.inputs?.date || '';
@@ -1858,8 +2207,10 @@
         badges += '<span class="badge dark">FINALIZED</span>';
         if (r.filedAt) badges += '<span class="badge done">FILED</span>';
         else if (queuedIds.has(r.id)) badges += '<span class="badge amber">QUEUED</span>';
-      } else if (hasCheckIn) {
-        badges += '<span class="badge done">DONE</span>';
+      } else {
+        if (hasCheckIn) badges += '<span class="badge done">DONE</span>';
+        if (draftSyncing.has(r.id)) badges += '<span class="badge amber">SYNCING</span>';
+        else if (r.cloudSyncedAt) badges += '<span class="badge cloud">CLOUD</span>';
       }
       return `
         <div class="rental-row ${isCurrent ? 'current' : ''}">
@@ -1872,6 +2223,22 @@
         </div>
       `;
     }).join('');
+
+    const cloudHtml = cloudOnly.map(d => {
+      const meta = [d.date, d.pontoon, d.hasCheckIn ? 'Check-in started' : 'Check-out only', 'from another device']
+        .filter(Boolean).join(' · ');
+      return `
+        <div class="rental-row">
+          <div class="rental-info">
+            <div class="rental-name">${escapeHtml(d.client || '(unnamed)')}<span class="badge cloud">CLOUD</span></div>
+            <div class="rental-meta">${escapeHtml(meta)}</div>
+          </div>
+          <button class="rental-action" onclick="openCloudDraft('${d.rentalId}')">Open</button>
+        </div>
+      `;
+    }).join('');
+
+    list.innerHTML = localHtml + cloudHtml;
   }
 
   /* ---- INIT ----------------------------------------------------------------- */
@@ -1907,8 +2274,25 @@
       }
     });
 
-    // Queued sends retry when connectivity returns
-    window.addEventListener('online', () => processQueue());
+    // Queued sends + cloud draft pushes retry when connectivity returns, and
+    // we re-pull the cloud draft list so a handoff from another device appears.
+    window.addEventListener('online', () => {
+      processQueue();
+      processDraftQueue();
+      fetchCloudDrafts();
+      updateSyncIndicator();
+    });
+    window.addEventListener('offline', updateSyncIndicator);
+
+    // Backgrounding the tab is the natural "I'm done / handing off" moment —
+    // flush the current rental to the cloud right then.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && currentRentalId) {
+        saveNow();
+        enqueueDraftOp(currentRentalId, 'save');
+        processDraftQueue();
+      }
+    });
 
     // Restore active rental or create new
     const activeId = (() => {
@@ -1931,6 +2315,11 @@
     updateBookingLink();
     updateQueueUI();
     processQueue();
+    // Phase 2: flush any pending cloud pushes and pull the cloud draft list so
+    // an in-progress rental started on another device shows up under "Saved".
+    updateSyncIndicator();
+    processDraftQueue();
+    fetchCloudDrafts();
   }
 
   // Wait for canvases to be sized before applying state

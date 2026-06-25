@@ -1,43 +1,46 @@
 /**
  * =============================================================================
- * BAXSTAR PONTOON — FILING BACKEND (Phase 1)
- * Google Apps Script web app. Receives the finalize POST from
- * baxstar_pontoon_form.html, files the complete rental record as a JSON
- * file in Drive, writes one log row to a Google Sheet, and emails the
- * customer their copy when an email address is on the record.
+ * BAXSTAR PONTOON — FILING BACKEND
+ * Google Apps Script web app. Receives POSTs from baxstar_pontoon_form.html.
+ *
+ *   Phase 1 (LIVE): finalize a completed rental — file the JSON record to
+ *     Drive, append one row to a Google Sheet, email the customer their copy.
+ *   Phase 2 (this update): cloud draft sync for cross-device handoff —
+ *     saveDraft / getActive / deleteDraft keep in-progress rentals in a Drive
+ *     "Pontoon Drafts" folder so any device can list and resume an open rental.
+ *     Plus a 6-month retention sweep that ARCHIVES (never silently deletes)
+ *     old finalized records.
  *
  * DEPLOY STEPS (Brady)
- * 1. Go to https://script.google.com → New project → name it
- *    "Baxstar Pontoon Filing".
- * 2. Delete the starter code and paste this entire file into Code.gs. Save.
- * 3. Run the function "setupCheck" once from the toolbar (▶). Google will
- *    ask you to authorize Drive, Sheets, and Gmail access — allow it.
- *    The run log should report the folder and Sheet are ready (it creates
- *    the "Pontoon Rentals" folder and "Pontoon_Rentals_Log" Sheet inside
- *    Baxstar Data Engine if they don't exist yet).
- * 4. Deploy → New deployment → type "Web app":
- *      - Execute as:        Me (brady@baxstarfishing.com)
- *      - Who has access:    Anyone
- *    Click Deploy and copy the Web app URL (ends in /exec).
- * 5. In baxstar_pontoon_form.html, paste that URL into FILING_URL.
- *    FILING_TOKEN in the form must match TOKEN below (it already does
- *    unless you change one of them). Commit and push.
- * 6. Live test: finalize a test rental with all four signatures →
- *    confirm the JSON file in Drive, the row in the Sheet, and the email
- *    (if you entered a customer email).
- *
- * NOTE — after any code change here, use Deploy → Manage deployments →
- * edit (pencil) → "New version" on the EXISTING deployment, so the /exec
- * URL stays the same and the form keeps working.
+ * 1. Go to https://script.google.com → open the existing "Baxstar Pontoon
+ *    Filing" project (or New project if starting fresh).
+ * 2. Replace Code.gs with this entire file. Save.
+ * 3. Run "setupCheck" once from the toolbar (▶) and authorize Drive/Sheets/
+ *    Gmail when asked. It creates the Pontoon Rentals folder + log Sheet AND
+ *    the Pontoon Drafts folder if they don't exist yet.
+ * 4. (Retention, optional but recommended) Run "setupRetention" once and
+ *    authorize when asked. It installs a monthly trigger that ARCHIVES
+ *    finalized records older than 6 months into "Pontoon Rentals Archive".
+ *    Nothing is ever deleted by the script — Brady empties the archive folder
+ *    on his own cadence.
+ * 5. Deploy:
+ *    - FIRST TIME: Deploy → New deployment → Web app →
+ *        Execute as: Me (brady@baxstarfishing.com) · Who has access: Anyone.
+ *      Copy the /exec URL into FILING_URL in baxstar_pontoon_form.html.
+ *    - UPDATING an existing deployment (the normal case after a code change):
+ *        Deploy → Manage deployments → edit (pencil) the existing deployment →
+ *        Version: New version → Deploy. This KEEPS the same /exec URL so the
+ *        form keeps working.
+ * 6. Live test: finalize a test rental with all four signatures → confirm the
+ *    JSON in Drive, the Sheet row, and the email. For Phase 2, save a draft on
+ *    one device and confirm it appears under "Saved" on a second device.
  *
  * SECURITY — honest limits: the form lives in a public GitHub repo, so the
- * /exec URL and TOKEN are both publicly readable. The token stops casual
- * abuse and stray POSTs, not a determined attacker. Worst case, someone
- * can file junk records into the folder/Sheet; they cannot read records,
- * which live only in Brady's Drive.
- *
- * Phase 2 (multi-device draft sync) will add actions to the router in
- * doPost — e.g. 'saveDraft' / 'getActive'. Not built in this phase.
+ * /exec URL and TOKEN are both publicly readable. The token stops casual abuse
+ * and stray POSTs, not a determined attacker. Worst case, someone can file or
+ * read JUNK drafts they themselves wrote; finalized customer records and any
+ * draft's signatures live only in Brady's Drive and are never returned in the
+ * lightweight draft list.
  * =============================================================================
  */
 
@@ -47,8 +50,12 @@ var CONFIG = {
   // "Baxstar Data Engine" folder — parent of everything this app creates
   DATA_ENGINE_FOLDER_ID: '1WghhwpLQfFfODtmnkTx__hTOaF3YDchW',
   RENTALS_FOLDER_NAME: 'Pontoon Rentals',
+  DRAFTS_FOLDER_NAME: 'Pontoon Drafts',
+  ARCHIVE_FOLDER_NAME: 'Pontoon Rentals Archive',
   LOG_SHEET_NAME: 'Pontoon_Rentals_Log',
-  EMAIL_SUBJECT: 'Your Baxstar Outdoors pontoon rental record'
+  EMAIL_SUBJECT: 'Your Baxstar Outdoors pontoon rental record',
+  // Finalized records older than this are archived by the retention sweep.
+  RETENTION_MONTHS: 6
 };
 
 var LOG_HEADERS = [
@@ -61,7 +68,7 @@ var LOG_HEADERS = [
 
 // The form POSTs as Content-Type text/plain (a CORS "simple request" —
 // Apps Script cannot answer a preflight) with one JSON object as the body:
-// the finalize payload plus { action: 'finalize', token: '...' }.
+// an action payload plus { action: '...', token: '...' }.
 function doPost(e) {
   var data;
   try {
@@ -76,7 +83,12 @@ function doPost(e) {
     switch (data.action) {
       case 'finalize':
         return jsonOut(handleFinalize(data));
-      // Phase 2 will add: case 'saveDraft': ...  case 'getActive': ...
+      case 'saveDraft':
+        return jsonOut(handleSaveDraft(data));
+      case 'getActive':
+        return jsonOut(handleGetActive(data));
+      case 'deleteDraft':
+        return jsonOut(handleDeleteDraft(data));
       default:
         return jsonOut({ ok: false, error: 'Unknown action: ' + String(data.action) });
     }
@@ -87,7 +99,11 @@ function doPost(e) {
 
 // Sanity check in a browser: the /exec URL should show this JSON.
 function doGet() {
-  return jsonOut({ ok: true, service: 'baxstar-pontoon-filing', actions: ['finalize'] });
+  return jsonOut({
+    ok: true,
+    service: 'baxstar-pontoon-filing',
+    actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft']
+  });
 }
 
 /* ---- FINALIZE ------------------------------------------------------------- */
@@ -106,11 +122,17 @@ function handleFinalize(p) {
     var file = saveRecordFile(folder, p);
     var email = sendCustomerCopy(p);
     appendLogRow(folder, p, file, email);
+    // The rental is now permanently filed — drop any in-progress cloud draft
+    // for it so it stops showing as "open" on other devices. Best-effort:
+    // a draft-cleanup hiccup must never fail an otherwise-good filing.
+    var draftRemoved = false;
+    try { draftRemoved = removeDraftFile(String(p.rentalId || '')); } catch (err2) {}
     return {
       ok: true,
       rentalId: String(p.rentalId || ''),
       fileUrl: file.getUrl(),
-      emailed: email.sent
+      emailed: email.sent,
+      draftRemoved: draftRemoved
     };
   } finally {
     lock.releaseLock();
@@ -176,6 +198,152 @@ function sendCustomerCopy(p) {
   } catch (err) {
     return { sent: false, status: 'FAILED: ' + String(err && err.message || err) };
   }
+}
+
+/* ---- PHASE 2: CLOUD DRAFT SYNC ---------------------------------------------
+   In-progress (not-yet-finalized) rentals are mirrored to a "Pontoon Drafts"
+   Drive folder, one JSON file per rentalId. This is what makes the day-1-Brady
+   / day-N-wife cross-device handoff possible. Drafts are transient working
+   copies: finalize files the permanent record and deletes the draft.
+
+   Each draft file:
+     name        Draft_<rentalId>.json
+     content     the full draft object { rentalId, updatedAt, ...meta, state }
+                 (state includes signatures captured so far)
+     description a small JSON of listing meta only, so getActive's list mode
+                 never has to parse/return the heavy signature data. */
+
+function getDraftsFolder() {
+  var parent = DriveApp.getFolderById(CONFIG.DATA_ENGINE_FOLDER_ID);
+  var existing = parent.getFoldersByName(CONFIG.DRAFTS_FOLDER_NAME);
+  return existing.hasNext() ? existing.next() : parent.createFolder(CONFIG.DRAFTS_FOLDER_NAME);
+}
+
+function draftFileName(rentalId) {
+  // rentalIds are generated as r_<ts>_<rand>; keep only safe chars defensively.
+  return 'Draft_' + String(rentalId || '').replace(/[^A-Za-z0-9_]+/g, '') + '.json';
+}
+
+function findDraftFile(folder, rentalId) {
+  var it = folder.getFilesByName(draftFileName(rentalId));
+  return it.hasNext() ? it.next() : null;
+}
+
+// Pull the listing meta from a draft, preferring the file description (cheap)
+// and falling back to parsing content if an older file lacks one.
+function draftMeta(file) {
+  var rentalId = file.getName().replace(/^Draft_/, '').replace(/\.json$/, '');
+  var meta = null;
+  try { meta = JSON.parse(file.getDescription() || 'null'); } catch (err) { meta = null; }
+  if (!meta) {
+    try {
+      var obj = JSON.parse(file.getBlob().getDataAsString());
+      meta = {
+        client: obj.client || '', date: obj.date || '', pontoon: obj.pontoon || '',
+        updatedAt: obj.updatedAt || 0, hasCheckIn: !!obj.hasCheckIn
+      };
+    } catch (err2) { meta = {}; }
+  }
+  return {
+    rentalId: rentalId,
+    client: meta.client || '',
+    date: meta.date || '',
+    pontoon: meta.pontoon || '',
+    updatedAt: Number(meta.updatedAt || 0),
+    hasCheckIn: !!meta.hasCheckIn,
+    finalized: !!meta.finalized
+  };
+}
+
+// Upsert one draft. Last-write-wins, but we return the PREVIOUS updatedAt so
+// the client can detect (and warn) if its write just clobbered a newer cloud
+// copy from another device. We never reject a save — losing an in-progress
+// edit is worse than a stale overwrite the user is told about.
+function handleSaveDraft(data) {
+  var rentalId = String(data.rentalId || '').trim();
+  if (!rentalId) return { ok: false, error: 'saveDraft: missing rentalId' };
+  if (!data.state || typeof data.state !== 'object') {
+    return { ok: false, error: 'saveDraft: missing state' };
+  }
+  var updatedAt = Number(data.updatedAt || 0) || Date.now();
+  var record = {
+    rentalId: rentalId,
+    updatedAt: updatedAt,
+    client: String(data.client || ''),
+    date: String(data.date || ''),
+    pontoon: String(data.pontoon || ''),
+    hasCheckIn: !!data.hasCheckIn,
+    finalized: !!data.finalized,
+    state: data.state
+  };
+  var meta = {
+    client: record.client, date: record.date, pontoon: record.pontoon,
+    updatedAt: record.updatedAt, hasCheckIn: record.hasCheckIn, finalized: record.finalized
+  };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var folder = getDraftsFolder();
+    var file = findDraftFile(folder, rentalId);
+    var previousUpdatedAt = 0;
+    if (file) {
+      try { previousUpdatedAt = Number((JSON.parse(file.getDescription() || '{}')).updatedAt || 0); } catch (err) {}
+      file.setContent(JSON.stringify(record));
+      file.setDescription(JSON.stringify(meta));
+    } else {
+      file = folder.createFile(draftFileName(rentalId), JSON.stringify(record), 'application/json');
+      file.setDescription(JSON.stringify(meta));
+    }
+    return { ok: true, rentalId: rentalId, updatedAt: updatedAt, previousUpdatedAt: previousUpdatedAt };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Two modes:
+//   { action:'getActive' }                  → list mode: lightweight meta only
+//   { action:'getActive', rentalId:'r_..' }  → fetch mode: one draft's full state
+function handleGetActive(data) {
+  var folder = getDraftsFolder();
+  var rentalId = String(data.rentalId || '').trim();
+
+  if (rentalId) {
+    var file = findDraftFile(folder, rentalId);
+    if (!file) return { ok: false, error: 'No draft for rentalId ' + rentalId, notFound: true };
+    var obj;
+    try { obj = JSON.parse(file.getBlob().getDataAsString()); }
+    catch (err) { return { ok: false, error: 'Draft file unreadable' }; }
+    return { ok: true, draft: obj };
+  }
+
+  var drafts = [];
+  var it = folder.getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (!/^Draft_.*\.json$/.test(f.getName())) continue;
+    drafts.push(draftMeta(f));
+  }
+  drafts.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+  return { ok: true, drafts: drafts };
+}
+
+function handleDeleteDraft(data) {
+  var rentalId = String(data.rentalId || '').trim();
+  if (!rentalId) return { ok: false, error: 'deleteDraft: missing rentalId' };
+  var removed = removeDraftFile(rentalId);
+  return { ok: true, rentalId: rentalId, removed: removed };
+}
+
+// Trash the draft file for a rentalId. Returns whether one was found.
+// Used by deleteDraft and after a confirmed finalize.
+function removeDraftFile(rentalId) {
+  if (!rentalId) return false;
+  var folder = getDraftsFolder();
+  var file = findDraftFile(folder, rentalId);
+  if (!file) return false;
+  file.setTrashed(true);
+  return true;
 }
 
 /* ---- DRIVE / SHEET PLUMBING ------------------------------------------------ */
@@ -244,14 +412,75 @@ function jsonOut(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+/* ---- RETENTION SWEEP -------------------------------------------------------
+   Brady keeps every finalized record 6 months, then it can go. To avoid a
+   script ever silently destroying a signed liability document, this MOVES
+   over-age records into "Pontoon Rentals Archive" instead of deleting them.
+   Brady empties that folder on his own cadence. Run setupRetention() once to
+   install the monthly trigger. */
+
+function getArchiveFolder() {
+  var parent = DriveApp.getFolderById(CONFIG.DATA_ENGINE_FOLDER_ID);
+  var existing = parent.getFoldersByName(CONFIG.ARCHIVE_FOLDER_NAME);
+  return existing.hasNext() ? existing.next() : parent.createFolder(CONFIG.ARCHIVE_FOLDER_NAME);
+}
+
+// A record's age is its finalizedAt (from the JSON), falling back to the
+// file's created date if that's missing/unparseable.
+function recordAgeCutoffMs() {
+  var d = new Date();
+  d.setMonth(d.getMonth() - CONFIG.RETENTION_MONTHS);
+  return d.getTime();
+}
+
+function purgeOldRecords() {
+  var cutoff = recordAgeCutoffMs();
+  var rentals = getRentalsFolder();
+  var archive = getArchiveFolder();
+  var moved = 0, scanned = 0;
+  var it = rentals.getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (!/\.json$/.test(f.getName())) continue;   // leave the log Sheet alone
+    scanned++;
+    var ts = f.getDateCreated().getTime();
+    try {
+      var obj = JSON.parse(f.getBlob().getDataAsString());
+      var fin = Date.parse(obj.finalizedAt);
+      if (!isNaN(fin)) ts = fin;
+    } catch (err) { /* use file date */ }
+    if (ts < cutoff) { f.moveTo(archive); moved++; }
+  }
+  Logger.log('Retention sweep: scanned ' + scanned + ' records, archived ' + moved
+    + ' older than ' + CONFIG.RETENTION_MONTHS + ' months into ' + archive.getName());
+  return { scanned: scanned, moved: moved };
+}
+
+// Run ONCE from the editor. Installs a monthly trigger (and clears any prior
+// copy of it so re-running doesn't stack duplicates).
+function setupRetention() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'purgeOldRecords') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('purgeOldRecords').timeBased().onMonthDay(1).atHour(3).create();
+  var archive = getArchiveFolder();
+  Logger.log('Retention installed: purgeOldRecords runs monthly (1st, ~3am). '
+    + 'Archive folder: ' + archive.getName() + ' (' + archive.getUrl() + ')');
+}
+
 /* ---- ONE-TIME SETUP / AUTH HELPER ------------------------------------------
    Run this once from the editor (step 3 of the deploy steps). It triggers
-   the Drive/Sheets/Gmail permission prompts and pre-creates the folder
-   and log Sheet so the first live finalize doesn't have to. */
+   the Drive/Sheets/Gmail permission prompts and pre-creates the folders and
+   log Sheet so the first live request doesn't have to. */
 function setupCheck() {
   var folder = getRentalsFolder();
   var sheet = getLogSheet(folder);
-  Logger.log('Folder ready: ' + folder.getName() + ' (' + folder.getUrl() + ')');
+  var drafts = getDraftsFolder();
+  Logger.log('Rentals folder ready: ' + folder.getName() + ' (' + folder.getUrl() + ')');
+  Logger.log('Drafts folder ready: ' + drafts.getName() + ' (' + drafts.getUrl() + ')');
   Logger.log('Log sheet ready: ' + sheet.getParent().getUrl());
   Logger.log('Gmail quota remaining today: ' + MailApp.getRemainingDailyQuota());
 }
