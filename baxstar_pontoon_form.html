@@ -1810,17 +1810,26 @@
     if (navigator.onLine === false) { updateSyncIndicator(); return; }
     draftQueueBusy = true;
     updateSyncIndicator();
+    // Identity of a queue entry, stable across re-reads of localStorage.
+    const qkey = e => e.rentalId + '|' + e.op + '|' + e.queuedAt;
+    const queue = getDraftQueue();
+    const snapshotKeys = new Set(queue.map(qkey));
+    const handled = new Set();   // entries finished this pass (sent OK or permanently skipped)
+    let newArrivals = false;
     try {
-      const queue = getDraftQueue();
-      const remaining = [];
       for (const entry of queue) {
         try {
           if (entry.op === 'delete') {
             await sendDraftAction({ action: 'deleteDraft', rentalId: entry.rentalId });
           } else {
             const r = getAllRentals().find(x => x.id === entry.rentalId);
-            if (!r) continue;            // gone locally — nothing to push
-            if (r.finalized) continue;   // finalize path cleans up the cloud draft
+            if (!r) { handled.add(qkey(entry)); continue; }            // gone locally — drop it
+            if (r.finalized) { handled.add(qkey(entry)); continue; }   // finalize cleans up the cloud draft
+            // If a delete got queued for this id while we were running, it wins —
+            // never resurrect a draft the user just deleted.
+            if (getDraftQueue().some(e => e.rentalId === entry.rentalId && e.op === 'delete')) {
+              handled.add(qkey(entry)); continue;
+            }
             const meta = draftMetaFromRental(r);
             const res = await sendDraftAction({
               action: 'saveDraft',
@@ -1832,19 +1841,33 @@
             });
             recordCloudSynced(r.id, res.updatedAt);
           }
+          handled.add(qkey(entry));
           lastCloudOk = true;
         } catch (err) {
-          entry.attempts = (entry.attempts || 0) + 1;
-          entry.lastError = String((err && err.message) || err);
-          remaining.push(entry);
+          // Leave this entry queued for retry (it survives the filter below because
+          // it is not in `handled`); record the error in place. No await here, so
+          // this read-modify-write can't interleave with another enqueue.
           lastCloudOk = false;
+          const live = getDraftQueue();
+          const le = live.find(e => qkey(e) === qkey(entry));
+          if (le) { le.attempts = (le.attempts || 0) + 1; le.lastError = String((err && err.message) || err); setDraftQueue(live); }
         }
       }
-      setDraftQueue(remaining);
+      // Re-read the live queue — it may have GAINED ops (e.g. a delete enqueued
+      // while we awaited). Remove only what we finished; keep failures + arrivals.
+      const live = getDraftQueue();
+      newArrivals = live.some(e => !snapshotKeys.has(qkey(e)));
+      setDraftQueue(live.filter(e => !handled.has(qkey(e))));
     } finally {
       draftQueueBusy = false;
       updateSyncIndicator();
       renderRentalsList();
+      // Drain work that arrived mid-run (its own processDraftQueue call was turned
+      // away by the busy guard). Gate on lastCloudOk so a failing network can't
+      // become a tight retry loop — those drain on the next reconnect/save/load.
+      if (newArrivals && lastCloudOk && navigator.onLine !== false) {
+        setTimeout(() => processDraftQueue(), 0);
+      }
     }
   }
 
@@ -2132,6 +2155,9 @@
       ? 'This record is FINALIZED. Delete it from this device? This cannot be undone.'
       : 'Delete this rental? This cannot be undone.';
     if (!confirm(msg)) return;
+    // Kill any pending debounced cloud push so it can't re-create (resurrect)
+    // the draft we're about to delete.
+    clearTimeout(cloudPushTimer);
     let rentals = getAllRentals();
     rentals = rentals.filter(x => x.id !== id);
     saveAllRentals(rentals);
