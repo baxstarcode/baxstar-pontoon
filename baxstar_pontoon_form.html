@@ -979,11 +979,13 @@
 
   function fetchTodaysReservations() {
     // Fetch-shaped: resolves with today's reservations, rejects if unavailable.
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(MOCK_RESERVATIONS.map(r => ({ ...r, date: todayStr() })));
-      }, 120);
-    });
+    // DORMANT until the real FareHarbor source exists: resolves an empty list,
+    // which keeps the advisory UI silent. The previous mock behavior auto-filled
+    // FAKE booking numbers into real finalized records whenever a customer's
+    // name happened to match the sample list — fabricated data in permanent
+    // business files. MOCK_RESERVATIONS stays above for the bench suite, which
+    // injects it explicitly (like B4 injects a failure).
+    return Promise.resolve([]);
   }
 
   /* ---- FUZZY NAME MATCHING -------------------------------------------- */
@@ -1063,6 +1065,9 @@
       return;
     }
     if (token !== resToken) return;
+    // No reservation source (dormant) or nothing today: stay silent rather
+    // than assert "walk-up is fine" — a fact we never checked.
+    if (!list.length) { status.hidden = true; return; }
     const result = matchReservation(name, list);
     if (result.status === 'found') {
       applyReservation(result.match);
@@ -1509,7 +1514,9 @@
         saveAllRentals(rentals);
         renderRentalsList();
         // If this emptied rental had ever reached the cloud, remove it there too.
-        if (wasSynced) { enqueueDraftOp(currentRentalId, 'delete'); processDraftQueue(); }
+        // Kill any pending debounced push first — same guard deleteRental uses —
+        // so the timer can't fire mid-queue and supersede this delete with a save.
+        if (wasSynced) { clearTimeout(cloudPushTimer); enqueueDraftOp(currentRentalId, 'delete'); processDraftQueue(); }
       }
       updateCurrentLabel();
       dirty = false;
@@ -1758,13 +1765,22 @@
     try { localStorage.setItem(DRAFT_QUEUE_KEY, JSON.stringify(q)); return true; }
     catch (e) { setStorageWarning(true); return false; }
   }
-  // One pending op per rental — a later op supersedes an earlier one (a delete
-  // cancels a pending save and vice-versa).
+  // One pending op per rental — a later op supersedes an earlier one, with ONE
+  // exception: a save never replaces a queued delete. The record is already
+  // gone locally at that point, and letting a stray debounced save supersede
+  // the delete was how "deleted" cloud drafts survived with bumped timestamps.
+  // (A delete replacing a queued save stays allowed — that's the correct
+  // cancellation.) Narrow tradeoff: if the user empties a rental and re-types
+  // into the same record before the delete drains, that one debounced save is
+  // dropped; the next edit/visibility/online trigger re-pushes the content.
   function enqueueDraftOp(rentalId, op) {
     if (!rentalId) return;
-    const q = getDraftQueue().filter(e => e.rentalId !== rentalId);
-    q.push({ rentalId, op, queuedAt: Date.now(), attempts: 0 });
-    setDraftQueue(q);
+    const q = getDraftQueue();
+    const existing = q.find(e => e.rentalId === rentalId);
+    if (op === 'save' && existing && existing.op === 'delete') return;
+    const rest = q.filter(e => e.rentalId !== rentalId);
+    rest.push({ rentalId, op, queuedAt: Date.now(), attempts: 0 });
+    setDraftQueue(rest);
     updateSyncIndicator();
   }
 
@@ -2048,6 +2064,31 @@
     // Ignore the auto-filled date when judging emptiness
     const meaningful = { ...state, inputs: { ...state.inputs, date: '' } };
     if (!hasAnyContent(meaningful)) { alert('Nothing to finalize — the form is empty.'); return; }
+    // Mirror the backend's four-signature gate (Code.gs missingSignatures)
+    // BEFORE locking: the backend hard-rejects filing without all four, and a
+    // record queued in that state retries forever and can never succeed.
+    // Reuses buildPayload so signatures are read exactly as the send reads them.
+    const preview = buildPayload({ id: currentRentalId, createdAt: 0, updatedAt: 0, state });
+    const sigMissing = [
+      [preview.checkOut, 'rentee', 'Rentee (check out)'],
+      [preview.checkOut, 'baxstar', 'Baxstar (check out)'],
+      [preview.checkIn, 'rentee', 'Rentee (check in)'],
+      [preview.checkIn, 'baxstar', 'Baxstar (check in)']
+    ].filter(([sec, key]) => {
+      const sig = sec && sec.signatures && sec.signatures[key];
+      return !(typeof sig === 'string' && sig.indexOf('data:image/') === 0);
+    }).map(([, , label]) => label);
+    if (sigMissing.length) {
+      alert('Cannot finalize yet — missing signatures:\n• ' + sigMissing.join('\n• ')
+        + '\n\nCollect the signatures, then finalize. (Filing is refused without them.)');
+      return;
+    }
+    // Invalid email files fine but the customer copy is silently skipped —
+    // surface that trade before locking. Pure local check, offline-safe.
+    const emailEl = document.getElementById('email');
+    if (emailEl && emailEl.value.trim() && emailEl.validity && !emailEl.validity.valid) {
+      if (!confirm('The customer email looks invalid — they will NOT receive their copy.\n\nFinalize anyway?')) return;
+    }
     if (!confirm('Finalize this rental?\n\nThe form will lock and the record will be filed. You can unlock later if something needs fixing.')) return;
     saveNow();
     const now = Date.now();
