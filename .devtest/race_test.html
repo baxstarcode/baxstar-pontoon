@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Draft delete-vs-save race test</title></head>
+<body>
+<div id="out">RUNNING</div>
+<div id="frames"></div>
+<script>
+const results = [];
+const MOCK = 'http://localhost:8809';
+const TOKEN = '122e17decac6b1e5fd414886f5ca95b7';
+function t(name, pass, info) {
+  results.push((pass ? 'PASS' : 'FAIL') + ' | ' + name + (info ? ' | ' + String(info).slice(0, 300) : ''));
+}
+function note(name, info) { results.push('INFO | ' + name + ' | ' + String(info).slice(0, 300)); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function loadFrame(src) {
+  return new Promise((resolve, reject) => {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'width:900px;height:1200px;border:0';
+    f.src = src;
+    f.addEventListener('load', async () => {
+      try {
+        const w = f.contentWindow;
+        for (let i = 0; i < 400; i++) {
+          if (w.document.readyState === 'complete') break;
+          await sleep(25);
+        }
+        await sleep(200);
+        resolve(f);
+      } catch (e) { reject(e); }
+    }, { once: true });
+    document.getElementById('frames').appendChild(f);
+  });
+}
+function reloadFrame(f) {
+  return new Promise(async (resolve) => {
+    f.addEventListener('load', async () => {
+      const w = f.contentWindow;
+      for (let i = 0; i < 400; i++) {
+        if (w.document.readyState === 'complete') break;
+        await sleep(25);
+      }
+      await sleep(300);
+      resolve(f);
+    }, { once: true });
+    f.contentWindow.location.reload();
+  });
+}
+function setVal(w, id, val) {
+  const el = w.document.getElementById(id);
+  el.value = val;
+  el.dispatchEvent(new w.Event('input', { bubbles: true }));
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+
+async function cloudIds() {
+  const r = await fetch(MOCK, { method: 'POST', body: JSON.stringify({ action: 'getActive', token: TOKEN }) });
+  const j = await r.json();
+  return (j.drafts || []).map(d => d.rentalId);
+}
+async function resetCloud() {
+  await fetch(MOCK + '/__reset', { method: 'POST' });
+}
+
+// Tap the frame's fetch. While tap.gate is a promise, saveDraft REQUESTS are
+// forwarded immediately (so the server-side write happens, like a real
+// in-flight POST) but the RESPONSE is withheld from the form until the gate
+// resolves — the form's processDraftQueue sits in its await, exactly the
+// in-flight window the race needs.
+function installTap(w) {
+  const orig = w.fetch.bind(w);
+  const tap = { gate: null, saveStarted: 0, log: [] };
+  w.fetch = (url, opts) => {
+    let body = null;
+    try { body = JSON.parse(opts && opts.body); } catch (e) {}
+    const action = (body && body.action) || '?';
+    tap.log.push(action + (body && body.rentalId ? ':' + body.rentalId.slice(-5) : ''));
+    if (action === 'saveDraft' && tap.gate) {
+      tap.saveStarted++;
+      const p = orig(url, opts);
+      const gate = tap.gate;
+      return (async () => { await gate; return p; })();
+    }
+    return orig(url, opts);
+  };
+  return tap;
+}
+
+async function freshFrame(src) {
+  let f = await loadFrame(src);
+  f.contentWindow.localStorage.clear();
+  f = await reloadFrame(f);
+  const w = f.contentWindow;
+  w.confirm = () => true;
+  w.alert = () => {};
+  return f;
+}
+
+// Create one rental with a client name and wait until it is synced to the mock.
+async function makeSyncedRental(w, name) {
+  setVal(w, 'client', name);
+  setVal(w, 'pontoon', 'Unit 9');
+  await sleep(4500); // 400ms autosave + 2500ms cloud debounce + flight
+  const id = (w.getAllRentals()[0] || {}).id;
+  const ids = await cloudIds();
+  return { id, synced: !!id && ids.includes(id) };
+}
+
+/* S1 — THE FIXED SCENARIO: delete while a saveDraft is in flight. */
+async function scenarioInFlight(src, label) {
+  await resetCloud();
+  const f = await freshFrame(src);
+  const w = f.contentWindow;
+  const tap = installTap(w);
+  const mk = await makeSyncedRental(w, 'Race ' + label);
+  t(label + ' setup: rental synced to mock cloud', mk.synced, 'id=' + mk.id);
+  if (!mk.synced) { f.remove(); return; }
+
+  // Arm the gate, then edit -> autosave -> debounced cloud push starts and hangs.
+  let release; tap.gate = new Promise(r => release = r);
+  const before = tap.saveStarted;
+  setVal(w, 'client', 'Race ' + label + ' EDITED');
+  let inFlight = false;
+  for (let i = 0; i < 240; i++) { if (tap.saveStarted > before) { inFlight = true; break; } await sleep(50); }
+  t(label + ' setup: saveDraft in flight (held)', inFlight, 'waited for cloud push');
+
+  // Delete while the save is mid-air.
+  w.deleteRental(mk.id);
+  t(label + ': local record removed at once', !w.getAllRentals().some(r => r.id === mk.id));
+  await sleep(400);
+  release(); tap.gate = null;
+  await sleep(3000); // save resolves, re-drain fires, delete lands
+
+  const ids = await cloudIds();
+  const q = w.getDraftQueue();
+  t(label + ': cloud draft REMOVED after delete-during-in-flight-save', !ids.includes(mk.id), 'cloud=' + JSON.stringify(ids));
+  t(label + ': draft queue drained (delete not wiped/stuck)', q.length === 0, JSON.stringify(q));
+  note(label + ' request log', tap.log.join(' > '));
+  f.remove();
+}
+
+/* S2 — pending debounce timer: delete <2.5s after an edit, nothing in flight.
+   Fix path under test: clearTimeout(cloudPushTimer) in deleteRental. */
+async function scenarioPendingTimer(src, label) {
+  await resetCloud();
+  const f = await freshFrame(src);
+  const w = f.contentWindow;
+  const tap = installTap(w);
+  const mk = await makeSyncedRental(w, 'Timer ' + label);
+  t(label + ' setup: rental synced to mock cloud', mk.synced, 'id=' + mk.id);
+  if (!mk.synced) { f.remove(); return; }
+
+  setVal(w, 'client', 'Timer ' + label + ' EDITED');
+  await sleep(700); // autosave done -> cloudPushTimer armed, NOT yet fired
+  w.deleteRental(mk.id);
+  await sleep(1500);
+  const idsEarly = await cloudIds();
+  t(label + ': cloud draft removed promptly after delete', !idsEarly.includes(mk.id), JSON.stringify(idsEarly));
+  await sleep(3500); // past the point the debounce timer would have fired
+  const idsLate = await cloudIds();
+  const q = w.getDraftQueue();
+  t(label + ': no resurrection after debounce window passes', !idsLate.includes(mk.id), JSON.stringify(idsLate));
+  t(label + ': draft queue drained', q.length === 0, JSON.stringify(q));
+  note(label + ' request log', tap.log.join(' > '));
+  f.remove();
+}
+
+/* S3 — HOLE PROBE: the OTHER delete path (doSave's empty-content branch,
+   which enqueues a cloud delete but does NOT clearTimeout(cloudPushTimer)).
+   While a save is in flight (queue busy), a re-armed debounce timer fires and
+   enqueueDraftOp('save') REPLACES the queued delete (one-op-per-rental), so
+   the delete is never sent. PASS on the final check means the HOLE EXISTS. */
+async function scenarioEmptyFieldHole(src, label) {
+  await resetCloud();
+  const f = await freshFrame(src);
+  const w = f.contentWindow;
+  const tap = installTap(w);
+  const mk = await makeSyncedRental(w, 'Hole ' + label);
+  t(label + ' setup: rental synced to mock cloud', mk.synced, 'id=' + mk.id);
+  if (!mk.synced) { f.remove(); return; }
+
+  // 1. Edit -> push starts and is held (queue now busy).
+  let release; tap.gate = new Promise(r => release = r);
+  const before = tap.saveStarted;
+  setVal(w, 'client', 'Hole ' + label + ' v2');
+  let inFlight = false;
+  for (let i = 0; i < 240; i++) { if (tap.saveStarted > before) { inFlight = true; break; } await sleep(50); }
+  t(label + ' setup: saveDraft in flight (held)', inFlight);
+
+  // 2. Edit again -> re-arms cloudPushTimer (fires in ~2.9s, while queue busy).
+  setVal(w, 'client', 'Hole ' + label + ' v3');
+  await sleep(600);
+
+  // 3. Empty the form -> doSave empty-content branch enqueues the cloud delete.
+  setVal(w, 'client', '');
+  setVal(w, 'pontoon', '');
+  await sleep(600);
+  const qAfterEmpty = w.getDraftQueue();
+  t(label + ': empty-content branch queued a delete op', qAfterEmpty.some(e => e.rentalId === mk.id && e.op === 'delete'), JSON.stringify(qAfterEmpty));
+
+  // 4. Wait for the re-armed timer to fire while the queue is still busy.
+  await sleep(2600);
+  const qAfterTimer = w.getDraftQueue();
+  const deleteSurvived = qAfterTimer.some(e => e.rentalId === mk.id && e.op === 'delete');
+  note(label + ': queue after debounce timer fired (delete replaced by save?)', JSON.stringify(qAfterTimer));
+
+  // 5. Release the held save; let everything drain.
+  release(); tap.gate = null;
+  await sleep(3000);
+
+  const ids = await cloudIds();
+  const q = w.getDraftQueue();
+  const localGone = !w.getAllRentals().some(r => r.id === mk.id);
+  // Bug-probe framing: PASS = hole demonstrated (cloud draft survives, nothing left queued to remove it).
+  t('HOLE-PROBE ' + label + ': cloud draft SURVIVES empty-field delete (delete op lost to timer save)',
+    ids.includes(mk.id) && q.length === 0 && localGone && !deleteSurvived,
+    'cloud=' + JSON.stringify(ids) + ' queue=' + JSON.stringify(q) + ' localGone=' + localGone);
+  note(label + ' request log', tap.log.join(' > '));
+  f.remove();
+}
+
+async function main() {
+  try {
+    await scenarioInFlight('form_phase2.html', 'CUR-S1');
+    await scenarioInFlight('form_prefix.html', 'PRE-S1');
+    await scenarioPendingTimer('form_phase2.html', 'CUR-S2');
+    await scenarioPendingTimer('form_prefix.html', 'PRE-S2');
+    await scenarioEmptyFieldHole('form_phase2.html', 'CUR-S3');
+  } catch (e) {
+    results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' / ') : e));
+  }
+  const pass = results.filter(r => r.startsWith('PASS')).length;
+  const fail = results.filter(r => r.startsWith('FAIL')).length;
+  document.getElementById('out').innerHTML =
+    '<pre id="results">' + results.map(r => r.replace(/</g, '&lt;')).join('\n') +
+    '\nTOTAL ' + pass + ' passed, ' + fail + ' failed</pre>';
+  document.title = 'TESTS-DONE';
+}
+main();
+</script>
+</body>
+</html>
