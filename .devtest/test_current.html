@@ -12,9 +12,17 @@ function t(name, pass, info) {
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+let _lastFrame = null;
 function loadFrame(src) {
   return new Promise((resolve, reject) => {
+    // Remove the previous scenario's frame first. All frames share this
+    // origin's localStorage, and a leftover frame's 400ms autosave / 2500ms
+    // cloud-push timers keep firing and can write stale records into storage
+    // mid-scenario — timing-dependent contamination that intermittently broke
+    // the FILED-marking assertions (75/0 on one machine, 73/75 on another).
+    if (_lastFrame) { _lastFrame.remove(); _lastFrame = null; }
     const f = document.createElement('iframe');
+    _lastFrame = f;
     f.style.cssText = 'width:900px;height:1200px;border:0';
     f.src = src;
     f.addEventListener('load', async () => {
@@ -213,6 +221,31 @@ async function main() {
   w.localStorage.clear();
   f = await reloadFrame(f); w = f.contentWindow;
 
+  // The live form's fetchTodaysReservations is DORMANT (resolves []) until the
+  // real FareHarbor source exists — inject the bench list here to exercise the
+  // advisory flow, exactly how B4 injects a failure.
+  const BENCH_RES = [
+    { name: 'Tyler Brandt',       start: '09:00', bookingId: '75312480' },
+    { name: 'Jon Carlson',        start: '10:30', bookingId: '75312511' },
+    { name: 'John Carlsen',       start: '13:00', bookingId: '75312557' },
+    { name: 'Maria Gutierrez',    start: '11:00', bookingId: '75312602' },
+    { name: "D'Angelo Whitfield", start: '14:30', bookingId: '75312648' },
+    { name: 'Sam & Kelly Onstad', start: '15:00', bookingId: '75312693' }
+  ];
+  const benchToday = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+  w.fetchTodaysReservations = () => Promise.resolve(BENCH_RES.map(r => ({ ...r, date: benchToday() })));
+
+  // B0: dormant source (the shipped default) keeps the advisory silent
+  {
+    const saved = w.fetchTodaysReservations;
+    w.fetchTodaysReservations = () => Promise.resolve([]);
+    setVal(w, 'client', 'Anybody Atall');
+    await sleep(1000);
+    t('dormant reservation source shows NO advisory (no false walk-up claim)', w.document.getElementById('res-status').hidden);
+    w.newRental();
+    w.fetchTodaysReservations = saved;
+  }
+
   // B1: exact match (case/punct/word-order insensitive) — found + autofill empty only
   setVal(w, 'out-time', '08:00');           // typed value must survive
   setVal(w, 'client', 'CARLSON, jon');
@@ -273,6 +306,23 @@ async function main() {
   setVal(w, 'booking', '75312480');
   setCheck(w, 'safety-0', true);
   drawSig(w, 'sig-out-rentee');
+  await sleep(700);
+
+  // C0b: the client-side signature gate (mirrors the backend's hard reject) —
+  // finalizing with only one of four signatures must block, naming the missing
+  // ones, and must NOT lock or queue anything.
+  alerts = [];
+  w.finalizeRental();
+  await sleep(100);
+  t('finalize blocks on missing signatures and names them',
+    alerts.length === 1 && /missing signatures/i.test(alerts[0]) && /Baxstar \(check out\)/.test(alerts[0]) && /Rentee \(check in\)/.test(alerts[0]),
+    alerts[0]);
+  t('signature block does not lock or queue', !w.document.body.classList.contains('locked') && w.getQueue().length === 0);
+
+  // now complete the remaining three and finalize for real
+  drawSig(w, 'sig-out-renter');
+  drawSig(w, 'sig-in-rentee');
+  drawSig(w, 'sig-in-renter');
   await sleep(700);
   w.finalizeRental();
   await sleep(400);
@@ -359,7 +409,11 @@ async function main() {
   }
   t('successful send drains queue', w2.getQueue().length === 0);
   await sleep(100);
-  const recD = w2.getAllRentals()[0];
+  // Find the finalized record rather than trusting [0]: the previous
+  // document's unload flush (beforeunload doSave) can resurrect a blank
+  // rental into freshly-cleared storage ahead of the record under test.
+  // Test-only condition — nothing clears storage under a live form.
+  const recD = w2.getAllRentals().find(r => r.finalized) || w2.getAllRentals()[0];
   t('successful send marks record FILED', !!(recD && recD.filedAt));
   w2.renderRentalsList();
   t('list shows FILED badge', w2.document.getElementById('rentals-list-items').innerHTML.includes('FILED'));
@@ -372,6 +426,11 @@ async function main() {
   w2.fetch = async () => { throw new TypeError('Failed to fetch'); };
   setVal(w2, 'client', 'Walkup Person');
   setCheck(w2, 'safety-0', true);
+  // the signature gate runs before the send path this scenario exercises
+  drawSig(w2, 'sig-out-rentee');
+  drawSig(w2, 'sig-out-renter');
+  drawSig(w2, 'sig-in-rentee');
+  drawSig(w2, 'sig-in-renter');
   await sleep(700);
   w2.finalizeRental();
   await sleep(500);
@@ -386,7 +445,8 @@ async function main() {
   // retry succeeds
   w2.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) });
   await w2.processQueue(true);
-  t('manual retry drains queue + files record', w2.getQueue().length === 0 && !!w2.getAllRentals()[0].filedAt);
+  const recE = w2.getAllRentals().find(r => r.finalized) || w2.getAllRentals()[0];
+  t('manual retry drains queue + files record', w2.getQueue().length === 0 && !!(recE && recE.filedAt));
 
   /* ============ Scenario F: storage failure surfaces visibly ============ */
   let f3 = await loadFrame('form_phase2.html');
