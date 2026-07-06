@@ -37,10 +37,21 @@
  *
  * SECURITY — honest limits: the form lives in a public GitHub repo, so the
  * /exec URL and TOKEN are both publicly readable. The token stops casual abuse
- * and stray POSTs, not a determined attacker. Worst case, someone can file or
- * read JUNK drafts they themselves wrote; finalized customer records and any
- * draft's signatures live only in Brady's Drive and are never returned in the
- * lightweight draft list.
+ * and stray POSTs, not a determined attacker. Real worst case (accepted risk,
+ * stated plainly):
+ *   - Anyone with the public token can LIST every draft's rentalId (getActive
+ *     list mode) and then FETCH any draft in full — including in-progress
+ *     customer names, details, and signature images. Finalized records are
+ *     NOT fetchable; drafts are.
+ *   - The finalize action sends a customer-copy email FROM Brady's Gmail with
+ *     an attacker-supplied recipient and largely attacker-supplied body text
+ *     (summaryText), gated only by four strings that merely need to start
+ *     with "data:image/". That is usable as an outbound mail relay for
+ *     phishing and can burn the daily Gmail quota (blocking real customer
+ *     copies). It also creates junk record files and Sheet rows.
+ * Mitigations if ever needed: rebuild the email body server-side from
+ * structured fields, rate-limit finalize emails via CacheService, or require
+ * a per-draft secret for fetch mode.
  * =============================================================================
  */
 
@@ -121,7 +132,13 @@ function handleFinalize(p) {
     var folder = getRentalsFolder();
     var file = saveRecordFile(folder, p);
     var email = sendCustomerCopy(p);
-    appendLogRow(folder, p, file, email);
+    // Best-effort, like draft cleanup below: by this point the record file
+    // exists and the customer may already be emailed — throwing here would
+    // return ok:false for a filing that actually happened, and the client's
+    // retry would file a duplicate _r2.json and email the customer again.
+    var logRowOk = true;
+    try { appendLogRow(folder, p, file, email); }
+    catch (errLog) { logRowOk = false; }
     // The rental is now permanently filed — drop any in-progress cloud draft
     // for it so it stops showing as "open" on other devices. Best-effort:
     // a draft-cleanup hiccup must never fail an otherwise-good filing.
@@ -132,7 +149,8 @@ function handleFinalize(p) {
       rentalId: String(p.rentalId || ''),
       fileUrl: file.getUrl(),
       emailed: email.sent,
-      draftRemoved: draftRemoved
+      draftRemoved: draftRemoved,
+      logRowAppended: logRowOk
     };
   } finally {
     lock.releaseLock();
@@ -161,12 +179,19 @@ function saveRecordFile(folder, p) {
   // Rebuild the filename server-side (same convention the form documents)
   // rather than trusting the client-supplied one.
   var name = buildFilename(p) + '.json';
-  // Never overwrite: a re-file after unlock gets a numbered name.
+  // Never overwrite: a re-file after unlock gets a numbered name. Trashed
+  // files don't count as collisions (name iterators include them otherwise).
   var finalName = name;
-  for (var n = 2; folder.getFilesByName(finalName).hasNext(); n++) {
+  for (var n = 2; hasLiveFile(folder, finalName); n++) {
     finalName = name.replace(/\.json$/, '_r' + n + '.json');
   }
   return folder.createFile(finalName, JSON.stringify(p, null, 2), 'application/json');
+}
+
+function hasLiveFile(folder, name) {
+  var it = folder.getFilesByName(name);
+  while (it.hasNext()) { if (!it.next().isTrashed()) return true; }
+  return false;
 }
 
 function buildFilename(p) {
@@ -225,8 +250,16 @@ function draftFileName(rentalId) {
 }
 
 function findDraftFile(folder, rentalId) {
+  // DriveApp name iterators also return TRASHED files (trashed items keep
+  // their parent folder). Without this guard, a deleted draft gets found and
+  // setContent()'d by a later saveDraft — the draft silently lives on in
+  // Trash and is destroyed at purge. Skip trashed explicitly.
   var it = folder.getFilesByName(draftFileName(rentalId));
-  return it.hasNext() ? it.next() : null;
+  while (it.hasNext()) {
+    var f = it.next();
+    if (!f.isTrashed()) return f;
+  }
+  return null;
 }
 
 // Pull the listing meta from a draft, preferring the file description (cheap)
@@ -322,6 +355,10 @@ function handleGetActive(data) {
   while (it.hasNext()) {
     var f = it.next();
     if (!/^Draft_.*\.json$/.test(f.getName())) continue;
+    // Trashed drafts still appear in folder iterators — without this guard a
+    // DELETED draft keeps showing on every device until Trash purges (~30d),
+    // which reproduces the "delete didn't take" live symptom by itself.
+    if (f.isTrashed()) continue;
     drafts.push(draftMeta(f));
   }
   drafts.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
