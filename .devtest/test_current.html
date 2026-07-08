@@ -120,7 +120,7 @@ async function main() {
   }
   t('reduced-motion media query present in CSS', hasRM);
   const rootStyle = w.getComputedStyle(w.document.documentElement);
-  t('warm color vars --bone/--pearl defined', rootStyle.getPropertyValue('--bone').trim() === '#c8c5bd' && rootStyle.getPropertyValue('--pearl').trim() === '#e8e6e0');
+  t('brand color vars --ink/--red/--red-bright defined (black/red pass)', rootStyle.getPropertyValue('--ink').trim() === '#0a0a0b' && rootStyle.getPropertyValue('--red').trim() === '#c1272d' && rootStyle.getPropertyValue('--red-bright').trim() === '#e3262e' && rootStyle.getPropertyValue('--text').trim() === '#e9e9ec');
 
   // A1: fill everything, special characters included
   const CLIENT = "Mike O'Brien-Smith <test> & co";
