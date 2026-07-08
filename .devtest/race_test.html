@@ -235,6 +235,8 @@ async function main() {
   document.getElementById('out').innerHTML =
     '<pre id="results">' + results.map(r => r.replace(/</g, '&lt;')).join('\n') +
     '\nTOTAL ' + pass + ' passed, ' + fail + ' failed</pre>';
+  // Same report drop the other suites use, so this also runs without playwright
+  try { await fetch(MOCK + '/report/race', { method: 'POST', body: document.getElementById('results').textContent }); } catch (e) {}
   document.title = 'TESTS-DONE';
 }
 main();

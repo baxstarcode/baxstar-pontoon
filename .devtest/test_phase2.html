@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Baxstar Phase 2 (cloud draft sync) test</title></head>
+<body>
+<div id="out">RUNNING</div>
+<div id="frames"></div>
+<script>
+/* Phase 2 cross-device handoff test.
+   The mock server (mock_gas_server.py) is the shared "cloud". One device is
+   simulated by clearing localStorage and reloading: the draft persists in the
+   mock, so a cleared device = a fresh phone that only has the cloud copy. */
+const TOKEN = '122e17decac6b1e5fd414886f5ca95b7';
+const results = [];
+function t(name, pass, info) {
+  results.push((pass ? 'PASS' : 'FAIL') + ' | ' + name + (info ? ' | ' + String(info).slice(0, 200) : ''));
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+async function mock(body) {
+  const r = await fetch('http://localhost:8809', { method: 'POST', body: JSON.stringify({ ...body, token: TOKEN }) });
+  return r.json();
+}
+
+function loadFrame(src) {
+  return new Promise((resolve) => {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'width:900px;height:1200px;border:0';
+    f.src = src;
+    f.addEventListener('load', async () => {
+      const w = f.contentWindow;
+      for (let i = 0; i < 400; i++) { if (w.document.readyState === 'complete') break; await sleep(25); }
+      await sleep(150);
+      resolve(f);
+    }, { once: true });
+    document.getElementById('frames').appendChild(f);
+  });
+}
+function reloadFrame(f) {
+  return new Promise((resolve) => {
+    f.addEventListener('load', async () => {
+      const w = f.contentWindow;
+      for (let i = 0; i < 400; i++) { if (w.document.readyState === 'complete') break; await sleep(25); }
+      await sleep(300);
+      resolve(f);
+    }, { once: true });
+    f.contentWindow.location.reload();
+  });
+}
+function setVal(w, id, val) {
+  const el = w.document.getElementById(id);
+  el.value = val;
+  el.dispatchEvent(new w.Event('input', { bubbles: true }));
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+function setCheck(w, id, on) {
+  const el = w.document.getElementById(id);
+  el.checked = on;
+  el.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
+function pevt(w, type, x, y, id) {
+  return new w.PointerEvent(type, { bubbles: true, cancelable: true, pointerId: id || 1, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y });
+}
+function drawSig(w, id) {
+  const c = w.document.getElementById(id);
+  const r = c.getBoundingClientRect();
+  c.dispatchEvent(pevt(w, 'pointerdown', r.left + 20, r.top + 40, 7));
+  c.dispatchEvent(pevt(w, 'pointermove', r.left + 80, r.top + 60, 7));
+  c.dispatchEvent(pevt(w, 'pointermove', r.left + 150, r.top + 45, 7));
+  c.dispatchEvent(pevt(w, 'pointerup', r.left + 150, r.top + 45, 7));
+}
+function setOnline(w, on) {
+  Object.defineProperty(w.navigator, 'onLine', { value: on, configurable: true });
+}
+
+async function main() {
+  try {
+    let f = await loadFrame('form_phase2.html');
+    let w = f.contentWindow;
+    w.localStorage.clear();
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+
+    /* ===== DEVICE A — check-out, then sync to cloud ===== */
+    setVal(w, 'client', 'Handoff Tester');
+    setVal(w, 'date', '2026-06-20');
+    setVal(w, 'pontoon', 'Unit 3');
+    setVal(w, 'booking', '75312480');
+    setVal(w, 'out-time', '09:00');
+    setCheck(w, 'safety-0', true);
+    setCheck(w, 'out-cond-0', true);
+    drawSig(w, 'sig-out-rentee');
+    drawSig(w, 'sig-out-renter');
+    w.saveNow();
+    await sleep(50);
+    const activeId = w.localStorage.getItem('baxstar_active_rental_id');
+    t('DIAG A: rentals after save', true, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state.inputs.client }))) + ' active=' + activeId);
+    const idA = activeId;
+    w.enqueueDraftOp(idA, 'save');
+    await w.processDraftQueue();
+    t('A: cloud push queue drains', w.getDraftQueue().length === 0, JSON.stringify(w.getDraftQueue()));
+
+    let cl = await mock({ action: 'getActive' });
+    t('A: backend stored the draft', cl.ok && cl.drafts.some(d => d.rentalId === idA && d.client === 'Handoff Tester'), JSON.stringify(cl.drafts));
+    t('A: list mode is lightweight (no state/signatures)', cl.drafts.every(d => !('state' in d) && !('sigs' in d)));
+    t('A: list meta carries hasCheckIn=false at checkout', cl.drafts.find(d => d.rentalId === idA).hasCheckIn === false);
+    const full = await mock({ action: 'getActive', rentalId: idA });
+    t('A: full draft fetch carries the checkout signature', full.ok && (full.draft.state.sigs['sig-out-rentee'] || '').startsWith('data:image/'));
+    t('A: full draft has no check-in signature yet', full.ok && !full.draft.state.sigs['sig-in-rentee']);
+
+    /* ===== DEVICE B — fresh phone (empty storage), resume from cloud =====
+       Reload FIRST to tear down device A's window (and its pending cloud-push
+       timers, which would otherwise re-write storage after we clear it — an
+       artifact of simulating two phones in one window), THEN clear + reload
+       again to land on a genuinely empty "new device". */
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    w.newRental();               // switch the active rental to a blank one, so the
+                                 // reload's backgrounding save has nothing to persist
+    await w.processDraftQueue();  // drain any op the debounce timer left queued
+    await sleep(100);
+    w.localStorage.clear();
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    t('B: fresh device has no local rentals', w.getAllRentals().length === 0, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state && r.state.inputs && r.state.inputs.client }))));
+
+    await w.fetchCloudDrafts();
+    const listHtml = w.document.getElementById('rentals-list-items').innerHTML;
+    t('B: cloud draft shows in Saved panel as a CLOUD row', /CLOUD/.test(listHtml) && /Handoff Tester/.test(listHtml), listHtml.replace(/\s+/g, ' ').slice(0, 160));
+
+    await w.openCloudDraft(idA);
+    await sleep(600);   // let hydrated signature images redraw
+    t('DIAG B: rentals after open', true, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state.inputs.client }))) + ' active=' + w.localStorage.getItem('baxstar_active_rental_id') + ' idA=' + idA);
+    t('B: opening cloud draft hydrates checkout fields', w.document.getElementById('client').value === 'Handoff Tester' && w.document.getElementById('out-time').value === '09:00');
+    t('B: original rentalId adopted (no duplicate fork)', w.getAllRentals().length === 1 && w.getAllRentals()[0].id === idA);
+    t('B: checkout signature restored on this device', (w.serializeState().sigs['sig-out-rentee'] || '').startsWith('data:image/'));
+
+    // Finish the check-in on device B and finalize.
+    setVal(w, 'in-time', '16:30');
+    setCheck(w, 'in-cond-0', true);
+    drawSig(w, 'sig-in-rentee');
+    drawSig(w, 'sig-in-renter');
+    w.saveNow();
+    await sleep(100);
+    w.finalizeRental();
+    await sleep(1600);
+    t('B: finalize filed the record (send queue drained)', w.getQueue().length === 0, JSON.stringify(w.getQueue().map(q => q.lastError)));
+    t('B: record marked FILED locally', !!(w.getAllRentals().find(r => r.id === idA) || {}).filedAt);
+    cl = await mock({ action: 'getActive' });
+    t('B: finalize removed the in-progress cloud draft', cl.ok && !cl.drafts.some(d => d.rentalId === idA), JSON.stringify(cl.drafts));
+
+    /* ===== C — deleting a synced rental removes its cloud draft ===== */
+    w.newRental();
+    setVal(w, 'client', 'ToDelete Tester');
+    setCheck(w, 'safety-1', true);
+    w.saveNow();
+    const idC = w.getAllRentals().find(r => r.state.inputs.client === 'ToDelete Tester').id;
+    w.enqueueDraftOp(idC, 'save');
+    await w.processDraftQueue();
+    let clC = await mock({ action: 'getActive' });
+    t('C: draft present in cloud before delete', clC.drafts.some(d => d.rentalId === idC));
+    // Cache the cloud copy locally first — that stale cache is the precondition
+    // for the ghost-row / stale-Saved-counter bug this guards against.
+    await w.fetchCloudDrafts();
+    w.deleteRental(idC);
+    await sleep(500);
+    clC = await mock({ action: 'getActive' });
+    t('C: deleting the rental removed its cloud draft', !clC.drafts.some(d => d.rentalId === idC), JSON.stringify(clC.drafts));
+    const htmlC = w.document.getElementById('rentals-list-items').innerHTML;
+    t('C: no ghost CLOUD row after delete (stale cache pruned)', !/ToDelete Tester/.test(htmlC), htmlC.replace(/\s+/g, ' ').slice(0, 160));
+    t('C: Saved counter matches visible rows', w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length), w.document.getElementById('rentals-count').textContent);
+
+    /* ===== D — offline-first: queues offline, auto-pushes on reconnect ===== */
+    w.newRental();
+    setVal(w, 'client', 'Offline Tester');
+    setCheck(w, 'safety-2', true);
+    w.saveNow();
+    const idD = w.getAllRentals().find(r => r.state.inputs.client === 'Offline Tester').id;
+    setOnline(w, false);
+    w.enqueueDraftOp(idD, 'save');
+    await w.processDraftQueue();
+    t('D: push stays queued while offline', w.getDraftQueue().some(e => e.rentalId === idD));
+    let clD = await mock({ action: 'getActive' });
+    t('D: nothing reaches the cloud while offline', !clD.drafts.some(d => d.rentalId === idD));
+    setOnline(w, true);
+    w.dispatchEvent(new w.Event('online'));
+    await sleep(800);
+    clD = await mock({ action: 'getActive' });
+    t('D: reconnect auto-pushed the queued draft', clD.drafts.some(d => d.rentalId === idD), JSON.stringify(w.getDraftQueue()));
+
+    /* ===== E — cloud-only rows get a working ✕ (no open-then-delete) ===== */
+    const stateStub = { inputs: {}, checks: {}, sigs: {}, marks: { out: [], in: [] } };
+    const idE = 'r_1750000000001_cldel1';
+    await mock({ action: 'saveDraft', rentalId: idE, updatedAt: 1750000000001, client: 'CloudOnly Tester', date: '2026-07-01', pontoon: 'Unit 9', hasCheckIn: false, state: stateStub });
+    await w.fetchCloudDrafts();
+    let htmlE = w.document.getElementById('rentals-list-items').innerHTML;
+    t('E: cloud-only row renders a delete ✕', /CloudOnly Tester/.test(htmlE) && htmlE.indexOf("deleteRental('" + idE + "')") !== -1, htmlE.replace(/\s+/g, ' ').slice(0, 200));
+    w.deleteRental(idE);
+    await sleep(400);
+    htmlE = w.document.getElementById('rentals-list-items').innerHTML;
+    t('E: ✕ on cloud-only row removes it with no ghost', !/CloudOnly Tester/.test(htmlE));
+    let clE = await mock({ action: 'getActive' });
+    t('E: cloud-only delete reached the backend', clE.ok && !clE.drafts.some(d => d.rentalId === idE), JSON.stringify(clE.drafts));
+    t('E: Saved counter matches visible rows after cloud delete', w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length), w.document.getElementById('rentals-count').textContent);
+
+    /* ===== F — offline cloud-only delete: hidden immediately, drains on reconnect ===== */
+    const idF = 'r_1750000000002_cldel2';
+    await mock({ action: 'saveDraft', rentalId: idF, updatedAt: 1750000000002, client: 'OfflineCloud Tester', date: '2026-07-02', pontoon: 'Unit 4', hasCheckIn: false, state: stateStub });
+    await w.fetchCloudDrafts();
+    t('F: cloud-only row visible before offline delete', /OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    setOnline(w, false);
+    w.deleteRental(idF);
+    await sleep(300);
+    t('F: offline delete stays queued', w.getDraftQueue().some(e => e.rentalId === idF && e.op === 'delete'), JSON.stringify(w.getDraftQueue()));
+    t('F: row + count hide while the delete is queued offline', !/OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML) && w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length));
+    let clF = await mock({ action: 'getActive' });
+    t('F: nothing deleted in the cloud while offline', clF.drafts.some(d => d.rentalId === idF));
+    setOnline(w, true);
+    w.dispatchEvent(new w.Event('online'));
+    await sleep(800);
+    clF = await mock({ action: 'getActive' });
+    t('F: reconnect drains the queued cloud-only delete', !clF.drafts.some(d => d.rentalId === idF), JSON.stringify(w.getDraftQueue()));
+    t('F: still no ghost after the queue drains', !/OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+
+    /* ===== G — a cloud draft with an unsafe rentalId is never rendered =====
+       rentalIds are interpolated into inline onclick handlers; the list only
+       renders ids matching the generator's charset. */
+    const badId = "x') ;alert(1);('";
+    await mock({ action: 'saveDraft', rentalId: badId, updatedAt: 1750000000003, client: 'Evil Tester', date: '2026-07-03', pontoon: '', hasCheckIn: false, state: stateStub });
+    await w.fetchCloudDrafts();
+    t('G: unsafe rentalId is filtered out of the list', !/Evil Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    await mock({ action: 'deleteDraft', rentalId: badId });   // cleanup
+
+  } catch (e) {
+    results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
+  }
+  const pass = results.filter(r => r.startsWith('PASS')).length;
+  const fail = results.length - pass;
+  const text = results.join('\n') + '\nTOTAL ' + pass + ' passed, ' + fail + ' failed/other';
+  document.getElementById('out').innerHTML = '<pre>' + text.replace(/</g, '&lt;') + '</pre>';
+  try { await fetch('http://localhost:8809/report/phase2', { method: 'POST', body: text }); } catch (e) {}
+  document.title = 'TESTS-DONE';
+}
+main();
+</script>
+</body>
+</html>

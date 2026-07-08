@@ -1512,11 +1512,14 @@
         const wasSynced = !!rentals[idx].cloudSyncedAt;
         rentals.splice(idx, 1);
         saveAllRentals(rentals);
-        renderRentalsList();
         // If this emptied rental had ever reached the cloud, remove it there too.
         // Kill any pending debounced push first — same guard deleteRental uses —
         // so the timer can't fire mid-queue and supersede this delete with a save.
         if (wasSynced) { clearTimeout(cloudPushTimer); enqueueDraftOp(currentRentalId, 'delete'); processDraftQueue(); }
+        // Render AFTER the delete is enqueued: with the local copy gone, a
+        // still-cached cloud copy would otherwise ghost in as a CLOUD row
+        // (offline, nothing re-renders until the queue drains).
+        renderRentalsList();
       }
       updateCurrentLabel();
       dirty = false;
@@ -1837,6 +1840,10 @@
         try {
           if (entry.op === 'delete') {
             await sendDraftAction({ action: 'deleteDraft', rentalId: entry.rentalId });
+            // The cloud copy is gone; drop it from the cached list too, or the
+            // row (and the Saved count) ghosts back once this entry leaves the
+            // queue — getActive may not refresh again for a while.
+            cloudDrafts = (cloudDrafts || []).filter(d => !(d && d.rentalId === entry.rentalId));
           } else {
             const r = getAllRentals().find(x => x.id === entry.rentalId);
             if (!r) { handled.add(qkey(entry)); continue; }            // gone locally — drop it
@@ -2192,9 +2199,14 @@
 
   function deleteRental(id) {
     const r = getAllRentals().find(x => x.id === id);
+    // No local copy = a cloud-only row: the delete below still works — the
+    // queue's delete path never reads local state — the local-cleanup steps
+    // are just no-ops for it.
     const msg = r && r.finalized
       ? 'This record is FINALIZED. Delete it from this device? This cannot be undone.'
-      : 'Delete this rental? This cannot be undone.';
+      : !r
+        ? 'Delete this cloud draft? If the phone it was started on still holds a local copy, it may come back when that phone reconnects.'
+        : 'Delete this rental? This cannot be undone.';
     if (!confirm(msg)) return;
     // Kill any pending debounced cloud push so it can't re-create (resurrect)
     // the draft we're about to delete.
@@ -2246,9 +2258,18 @@
     if (!list) return;
     const rentals = getAllRentals().sort((a, b) => b.updatedAt - a.updatedAt);
     const localIds = new Set(rentals.map(r => r.id));
+    // A cloud row with a delete queued against it is already gone as far as
+    // this device is concerned — hide it now so the row and the Saved count
+    // stay honest during the (possibly offline) gap before the delete drains
+    // and a fresh getActive confirms.
+    const pendingDeletes = new Set(getDraftQueue().filter(e => e.op === 'delete').map(e => e.rentalId));
     // Drafts that exist in the cloud but not on this device — the cross-device
-    // handoff rows (e.g. a checkout started on the other phone).
-    const cloudOnly = (cloudDrafts || []).filter(d => d && d.rentalId && !localIds.has(d.rentalId) && !d.finalized);
+    // handoff rows (e.g. a checkout started on the other phone). rentalIds get
+    // interpolated into the inline onclick handlers below, so only ids matching
+    // the generator's charset (r_<ts>_<base36>) are rendered at all.
+    const cloudOnly = (cloudDrafts || []).filter(d => d && typeof d.rentalId === 'string'
+      && /^[\w-]+$/.test(d.rentalId)
+      && !localIds.has(d.rentalId) && !pendingDeletes.has(d.rentalId) && !d.finalized);
     const countEl = document.getElementById('rentals-count');
     if (countEl) countEl.textContent = rentals.length + cloudOnly.length;
 
@@ -2301,6 +2322,7 @@
             <div class="rental-meta">${escapeHtml(meta)}</div>
           </div>
           <button class="rental-action" onclick="openCloudDraft('${d.rentalId}')">Open</button>
+          <button class="rental-action danger" onclick="deleteRental('${d.rentalId}')">✕</button>
         </div>
       `;
     }).join('');

@@ -23,4 +23,7 @@ swap "http://localhost:8809"           > race_webroot/form_phase2.html
 # the pre-fix control for the race harness comes from git:
 git -C .. show 3b25b92^:baxstar_pontoon_form.html | sed "s|const FILING_URL = '[^']*'|const FILING_URL = 'http://localhost:8809'|" > race_webroot/form_prefix.html
 cp race_test.html race_webroot/ 2>/dev/null || true
+# the cloud-sync suite needs the localhost:8809 form variant, so it runs from
+# race_webroot/ too (open http://localhost:8001/race_webroot/test_phase2.html)
+cp test_phase2.html race_webroot/ 2>/dev/null || true
 echo "built: form_phase2.html (no URL), form_with_url.html (hooks.test.invalid), race_webroot/ (localhost:8809)"
