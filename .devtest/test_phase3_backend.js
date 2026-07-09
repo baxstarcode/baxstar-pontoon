@@ -275,7 +275,14 @@ var GmailApp = {
         // spoofed sender with a perfect-looking booking — must be ignored
         fakeThread([fakeMsg('Mallory <mallory@evil.example>', subjA,
           bookingHtml({ id: '999999999', name: 'Ada Renter', item: PONTOON_SD,
-            dateLine: 'Thursday, July 9, 2026 at 1:00 pm - 9:00 pm' }), 5000)])
+            dateLine: 'Thursday, July 9, 2026 at 1:00 pm - 9:00 pm' }), 5000)]),
+        // DISPLAY-NAME spoof: Gmail's from: search matches display names, and
+        // a substring sender check would too. Address-only comparison must
+        // reject this.
+        fakeThread([fakeMsg('"messages@fareharbor.com" <mallory@evil.example>',
+          'New online booking: ' + PONTOON_SD + ' on Thursday, July 9, 2026 at 3:00 pm - 8:00 pm',
+          bookingHtml({ id: '999999998', name: 'Eve L. Genius', item: PONTOON_SD,
+            dateLine: 'Thursday, July 9, 2026 at 3:00 pm - 8:00 pm' }), 5500)])
       ];
     }
     if (query.indexOf('"910000002"') !== -1) {
@@ -308,6 +315,15 @@ t('handler: spoofed sender contributed nothing',
     for (var i = 0; i < res.bookings.length; i++) if (res.bookings[i].bookingId === '999999999') return false;
     return true;
   })());
+t('handler: display-name spoof contributed nothing',
+  res && res.ok && (function () {
+    for (var i = 0; i < res.bookings.length; i++) if (res.bookings[i].bookingId === '999999998') return false;
+    return true;
+  })());
+t('sender address extraction: bare, bracketed, display-name-spoofed',
+  fhSenderAddress('messages@fareharbor.com') === 'messages@fareharbor.com'
+  && fhSenderAddress('Baxstar via FareHarbor <MESSAGES@FareHarbor.com>') === 'messages@fareharbor.com'
+  && fhSenderAddress('"messages@fareharbor.com" <mallory@evil.example>') === 'mallory@evil.example');
 
 /* zero-bookings-today */
 GmailApp = { search: function () { return []; } };

@@ -221,9 +221,11 @@ async function main() {
   w.localStorage.clear();
   f = await reloadFrame(f); w = f.contentWindow;
 
-  // The live form's fetchTodaysReservations is DORMANT (resolves []) until the
-  // real FareHarbor source exists — inject the bench list here to exercise the
-  // advisory flow, exactly how B4 injects a failure.
+  // Phase 3: fetchTodaysReservations is real (backend getTodaysBookings) but
+  // stays DORMANT (resolves []) in this variant — form_phase2.html has no
+  // FILING_URL. Inject the bench list here to exercise the advisory flow,
+  // exactly how B4 injects a failure. (Real-fetch path is covered by the
+  // cloud suite against the localhost mock.)
   const BENCH_RES = [
     { name: 'Tyler Brandt',       start: '09:00', bookingId: '75312480' },
     { name: 'Jon Carlson',        start: '10:30', bookingId: '75312511' },
@@ -364,6 +366,10 @@ async function main() {
   w2.alert = () => {};
   const calls = [];
   w2.fetch = async (url, opts) => { calls.push({ url, body: opts.body, opts }); return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) }; };
+  // Phase 3: typing a client name in a URL-configured form now legitimately
+  // fires a getTodaysBookings lookup POST too — split the two streams so the
+  // finalize assertions stay about finalize.
+  const byAction = (action) => calls.filter(c => { try { return JSON.parse(c.body).action === action; } catch (e) { return false; } });
 
   setVal(w2, 'client', 'Maria Gutierrez');
   setVal(w2, 'date', '2026-06-10');
@@ -388,14 +394,20 @@ async function main() {
   w2.finalizeRental();
   await sleep(500);
 
-  t('POST fired once to webhook', calls.length === 1 && /hooks\.test\.invalid/.test(calls[0].url), calls.length + ' calls');
-  t('CORS-safe: no custom headers on finalize POST', !(calls[0].opts && calls[0].opts.headers), JSON.stringify(calls[0].opts && calls[0].opts.headers));
+  const finCalls = byAction('finalize');
+  t('finalize POST fired once to webhook', finCalls.length === 1 && /hooks\.test\.invalid/.test(finCalls[0].url), calls.length + ' total calls, ' + finCalls.length + ' finalize');
+  t('CORS-safe: no custom headers on finalize POST', !(finCalls[0].opts && finCalls[0].opts.headers), JSON.stringify(finCalls[0].opts && finCalls[0].opts.headers));
+  // Phase 3: the reservation lookup that fired while typing must be equally
+  // CORS-simple and token-authenticated (mock/GAS reject anything else).
+  const lookCalls = byAction('getTodaysBookings');
+  t('phase3: typing client name fired a booking lookup', lookCalls.length >= 1, calls.length + ' calls');
+  t('phase3: lookup POST is CORS-simple + carries token', lookCalls.length >= 1 && !(lookCalls[0].opts && lookCalls[0].opts.headers) && (function () { try { const b = JSON.parse(lookCalls[0].body); return typeof b.token === 'string' && b.token.length >= 16; } catch (e) { return false; } })());
   let bodyObj = null;
-  try { bodyObj = JSON.parse(calls[0].body); } catch (e) {}
+  try { bodyObj = JSON.parse(finCalls[0].body); } catch (e) {}
   t('POST body carries action+token for the backend', !!bodyObj && bodyObj.action === 'finalize' && typeof bodyObj.token === 'string' && bodyObj.token.length >= 16);
   t('payload: customerEmail field present', !!bodyObj && bodyObj.customerEmail === 'maria@example.com', bodyObj && bodyObj.customerEmail);
   let p = null;
-  try { p = JSON.parse(calls[0].body); } catch (e) {}
+  try { p = JSON.parse(finCalls[0].body); } catch (e) {}
   t('payload parses as JSON', !!p);
   if (p) {
     t('payload: identity fields complete', p.client === 'Maria Gutierrez' && p.date === '2026-06-10' && p.pontoonUnit === 'Unit 1' && p.bookingId === '75312602' && p.formType === 'baxstar_pontoon_checkin');

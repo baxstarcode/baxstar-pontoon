@@ -1013,15 +1013,47 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
 
+  // Phase 3: the REAL source. The backend's getTodaysBookings action scans
+  // Brady's Gmail for FareHarbor operator emails and returns today's actual
+  // PONTOON bookings (new/rebooked/cancelled already reconciled server-side,
+  // latest email wins). Everything served here was parsed from a real
+  // FareHarbor email — the previous mock behavior (auto-filling FAKE booking
+  // numbers whenever a name matched the sample list) stays dead.
+  // MOCK_RESERVATIONS stays above for the bench suite, which injects it
+  // explicitly (like B4 injects a failure).
+  let resCache = null;   // {at, list} — keystroke checks shouldn't re-hit Gmail
   function fetchTodaysReservations() {
     // Fetch-shaped: resolves with today's reservations, rejects if unavailable.
-    // DORMANT until the real FareHarbor source exists: resolves an empty list,
-    // which keeps the advisory UI silent. The previous mock behavior auto-filled
-    // FAKE booking numbers into real finalized records whenever a customer's
-    // name happened to match the sample list — fabricated data in permanent
-    // business files. MOCK_RESERVATIONS stays above for the bench suite, which
-    // injects it explicitly (like B4 injects a failure).
-    return Promise.resolve([]);
+    // No backend configured (bench form_phase2.html variant) → dormant, same
+    // silent-empty behavior as before Phase 3.
+    if (!webhookConfigured()) return Promise.resolve([]);
+    if (resCache && Date.now() - resCache.at < 60000) return Promise.resolve(resCache.list);
+    return fetch(FILING_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'getTodaysBookings', token: FILING_TOKEN })
+    }).then((res) => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).then((data) => {
+      if (!data || data.ok !== true || !Array.isArray(data.bookings)) {
+        throw new Error(data && data.error || 'Booking lookup failed');
+      }
+      // Whitelist + validate every field before it can reach the DOM or the
+      // record. Booking ids must be plain digits — anything else is dropped.
+      const list = data.bookings
+        .filter((b) => b && /^\d{5,12}$/.test(String(b.bookingId)))
+        .map((b) => ({
+          bookingId: String(b.bookingId),
+          name: String(b.name || '').slice(0, 200),
+          item: String(b.item || '').slice(0, 200),
+          date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.date)) ? String(b.date) : '',
+          start: /^\d{2}:\d{2}$/.test(String(b.start)) ? String(b.start) : '',
+          email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(b.email || '')) ? String(b.email) : ''
+        }))
+        .filter((b) => b.name);
+      resCache = { at: Date.now(), list };
+      return list;
+    });
   }
 
   /* ---- FUZZY NAME MATCHING -------------------------------------------- */
@@ -1107,7 +1139,10 @@
     const result = matchReservation(name, list);
     if (result.status === 'found') {
       applyReservation(result.match);
+      // Item shown on purpose: Brady must SEE what matched (a wrong-item
+      // auto-fill has to be visible at a glance, not silent).
       showResStatus('res-found', '✓ Reservation found: ' + escapeHtml(result.match.name)
+        + (result.match.item ? ' · ' + escapeHtml(result.match.item) : '')
         + ' · ' + escapeHtml(result.match.start) + ' · #' + escapeHtml(result.match.bookingId));
     } else if (result.status === 'suggest') {
       const btns = result.options.map((o, i) =>
@@ -1119,6 +1154,7 @@
           const o = result.options[Number(b.dataset.resIdx)];
           applyReservation(o);
           showResStatus('res-found', '✓ Using reservation: ' + escapeHtml(o.name)
+            + (o.item ? ' · ' + escapeHtml(o.item) : '')
             + ' · ' + escapeHtml(o.start) + ' · #' + escapeHtml(o.bookingId));
         });
       });
@@ -1132,9 +1168,12 @@
     const dateEl = document.getElementById('date');
     const timeEl = document.getElementById('out-time');
     const bookEl = document.getElementById('booking');
-    if (dateEl && !dateEl.value) dateEl.value = r.date;
-    if (timeEl && !timeEl.value) timeEl.value = r.start;
+    const emailEl = document.getElementById('email');
+    if (dateEl && !dateEl.value && r.date) dateEl.value = r.date;
+    if (timeEl && !timeEl.value && r.start) timeEl.value = r.start;
     if (bookEl && !bookEl.value.trim()) { bookEl.value = r.bookingId; updateBookingLink(); }
+    // Online bookings carry the customer email; staff-entered ones don't.
+    if (emailEl && !emailEl.value.trim() && r.email) emailEl.value = r.email;
     autoSave();
   }
 

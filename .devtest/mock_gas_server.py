@@ -9,6 +9,9 @@ Phase 1 action: finalize (validates token + 4 signatures, "files" the record).
 Phase 2 actions: saveDraft / getActive / deleteDraft — an in-memory mirror of
 the Drive "Pontoon Drafts" folder, so the cross-device draft handoff can be
 driven end-to-end locally. Drafts persist for the life of the process.
+Phase 3 action: getTodaysBookings — serves whatever a test staged via
+POST /__set_bookings {"bookings": [...]} (or {"fail": true} to simulate a
+Gmail-scan failure). Defaults to an empty list, like a day with no bookings.
 
 Logs every request to mock_log.jsonl. Also accepts POST /report/<name>
 from test pages, saved to report_<name>.txt.
@@ -22,6 +25,9 @@ LOG = open('mock_log.jsonl', 'a')
 
 # In-memory stand-in for the Drive "Pontoon Drafts" folder, keyed by rentalId.
 DRAFTS = {}
+
+# Phase 3: what getTodaysBookings serves. Tests stage this via /__set_bookings.
+BOOKINGS = {'fail': False, 'bookings': []}
 
 
 def log(entry):
@@ -75,7 +81,8 @@ class Handler(BaseHTTPRequestHandler):
     # GET sanity endpoint, mirrors doGet().
     def do_GET(self):
         self._respond(200, {'ok': True, 'service': 'baxstar-pontoon-filing-mock',
-                            'actions': ['finalize', 'saveDraft', 'getActive', 'deleteDraft']})
+                            'actions': ['finalize', 'saveDraft', 'getActive',
+                                        'deleteDraft', 'getTodaysBookings']})
 
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
@@ -93,7 +100,23 @@ class Handler(BaseHTTPRequestHandler):
         # which must not see drafts auto-pushed by earlier scenarios).
         if self.path == '/__reset':
             DRAFTS.clear()
+            BOOKINGS['fail'] = False
+            BOOKINGS['bookings'] = []
             log({'method': 'POST', 'path': '/__reset', 'cleared': True})
+            self._respond(200, {'ok': True})
+            return
+
+        # Test-only: stage what getTodaysBookings serves.
+        if self.path == '/__set_bookings':
+            try:
+                staged = json.loads(raw)
+            except Exception:
+                self._respond(200, {'ok': False, 'error': 'not JSON'})
+                return
+            BOOKINGS['fail'] = bool(staged.get('fail'))
+            BOOKINGS['bookings'] = staged.get('bookings') or []
+            log({'method': 'POST', 'path': '/__set_bookings',
+                 'fail': BOOKINGS['fail'], 'count': len(BOOKINGS['bookings'])})
             self._respond(200, {'ok': True})
             return
 
@@ -119,6 +142,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._get_active(data)
         if action == 'deleteDraft':
             return self._delete_draft(data)
+        if action == 'getTodaysBookings':
+            return self._get_todays_bookings()
 
         log({'method': 'POST', 'action': action, 'error': 'unknown action'})
         self._respond(200, {'ok': False, 'error': 'Unknown action: ' + str(action)})
@@ -195,6 +220,16 @@ class Handler(BaseHTTPRequestHandler):
                         key=lambda m: m['updatedAt'], reverse=True)
         log({'method': 'POST', 'action': 'getActive', 'mode': 'list', 'count': len(drafts)})
         self._respond(200, {'ok': True, 'drafts': drafts})
+
+    # ---- Phase 3 -----------------------------------------------------------
+    def _get_todays_bookings(self):
+        log({'method': 'POST', 'action': 'getTodaysBookings',
+             'fail': BOOKINGS['fail'], 'count': len(BOOKINGS['bookings'])})
+        if BOOKINGS['fail']:
+            self._respond(200, {'ok': False, 'error': 'Booking lookup failed: mock failure'})
+            return
+        self._respond(200, {'ok': True, 'date': time.strftime('%Y-%m-%d'),
+                            'bookings': BOOKINGS['bookings']})
 
     def _delete_draft(self, data):
         rid = str(data.get('rentalId') or '').strip()

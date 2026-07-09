@@ -623,6 +623,16 @@ function fhMergeEvents(events, todayIso) {
   return out;
 }
 
+// The ADDRESS part of a From header. "Name <a@b>" → "a@b"; bare address
+// passes through. A display name is attacker-chosen — Gmail's from: operator
+// matches display names too, so '"messages@fareharbor.com" <evil@x>' would
+// sail through both the search AND a substring check. Compare addresses only.
+function fhSenderAddress(from) {
+  var s = String(from || '');
+  var m = /<([^<>]+)>\s*$/.exec(s);
+  return (m ? m[1] : s).replace(/^\s+|\s+$/g, '').toLowerCase();
+}
+
 // Pull parse-able events out of Gmail threads. Non-FareHarbor senders and
 // noise subjects contribute nothing; one malformed email never poisons the
 // batch (it is skipped, not fatal).
@@ -632,7 +642,7 @@ function fhEventsFromThreads(threads) {
     var msgs = threads[t].getMessages();
     for (var m = 0; m < msgs.length; m++) {
       var msg = msgs[m];
-      if (String(msg.getFrom()).toLowerCase().indexOf(CONFIG.FAREHARBOR_SENDER) === -1) continue;
+      if (fhSenderAddress(msg.getFrom()) !== CONFIG.FAREHARBOR_SENDER) continue;
       var ev = null;
       try { ev = fhParseEmail(msg.getSubject(), msg.getBody(), msg.getDate().getTime()); }
       catch (err) { ev = null; }

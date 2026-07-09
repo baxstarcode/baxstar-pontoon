@@ -229,6 +229,77 @@ async function main() {
     t('G: unsafe rentalId is filtered out of the list', !/Evil Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
     await mock({ action: 'deleteDraft', rentalId: badId });   // cleanup
 
+    /* ===== H — Phase 3: FareHarbor Gmail-scan lookup feeds the advisory =====
+       Real path end-to-end: form → POST getTodaysBookings → mock → advisory →
+       auto-fill. Frame reloads between sub-cases clear the form's 60s lookup
+       cache. Fixture data is fictional (public repo). */
+    const todayIso = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+    const stage = (payload) => fetch('http://localhost:8809/__set_bookings', { method: 'POST', body: JSON.stringify(payload) });
+    await stage({ bookings: [
+      { bookingId: '910000001', name: 'Ada Renter', phone: '(555) 010-0002',
+        email: 'ada.renter@example.com', item: 'Pontoon Rental – Single Day',
+        date: todayIso(), start: '13:00', end: '21:00', multiDay: false,
+        createdBy: 'Online customer' },
+      { bookingId: '910000002', name: 'Bob Boater', phone: '', email: '',
+        item: 'Pontoon Rental with 115 hp– Multi-Day (Delivered to your lake)',
+        date: todayIso(), start: '09:00', end: '', multiDay: true,
+        createdBy: 'Brady Baxter (Baxstar Fishing Guide Service)' }
+    ] });
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    w.newRental();
+    setVal(w, 'client', 'ada renter');            // case-insensitive on purpose
+    await sleep(1400);                             // 500ms debounce + fetch
+    let resH = w.document.getElementById('res-status');
+    t('H: real lookup finds the online booking', !resH.hidden && resH.className.includes('res-found'), resH.textContent);
+    t('H: advisory names the item (wrong-item fills must be visible)', /Pontoon Rental – Single Day/.test(resH.textContent), resH.textContent);
+    t('H: booking # + email + date + start auto-filled from the real record',
+      w.document.getElementById('booking').value === '910000001'
+      && w.document.getElementById('email').value === 'ada.renter@example.com'
+      && w.document.getElementById('date').value === todayIso()
+      && w.document.getElementById('out-time').value === '13:00',
+      JSON.stringify({ b: w.document.getElementById('booking').value, e: w.document.getElementById('email').value, d: w.document.getElementById('date').value, t: w.document.getElementById('out-time').value }));
+
+    // staff-entered booking: no customer email on the FareHarbor side —
+    // fills everything else, leaves email alone (Brady's conditional field).
+    w.newRental();
+    setVal(w, 'client', 'Bob Boater');
+    await sleep(1400);
+    resH = w.document.getElementById('res-status');
+    t('H: staff booking (no email in email-less confirmation) fills without email',
+      resH.className.includes('res-found')
+      && w.document.getElementById('booking').value === '910000002'
+      && w.document.getElementById('email').value === ''
+      && w.document.getElementById('out-time').value === '09:00',
+      JSON.stringify({ b: w.document.getElementById('booking').value, e: w.document.getElementById('email').value }));
+
+    // fuzzy-matches-nothing → explicit walk-up advisory (list was non-empty)
+    w.newRental();
+    setVal(w, 'client', 'Zebulon Quagmire');
+    await sleep(1400);
+    resH = w.document.getElementById('res-status');
+    t('H: unmatched name shows walk-up-is-fine', !resH.hidden && resH.className.includes('res-none'), resH.textContent);
+
+    // zero bookings today → advisory stays silent (no false walk-up claim)
+    await stage({ bookings: [] });
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    w.newRental();
+    setVal(w, 'client', 'Ada Renter');
+    await sleep(1400);
+    t('H: zero-bookings day keeps the advisory silent', w.document.getElementById('res-status').hidden);
+
+    // backend failure → honest couldn't-verify, field stays editable
+    await stage({ fail: true });
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    w.newRental();
+    setVal(w, 'client', 'Ada Renter');
+    await sleep(1400);
+    resH = w.document.getElementById('res-status');
+    t("H: lookup failure shows couldn't-verify (never a silent guess)", !resH.hidden && resH.className.includes('res-error') && !w.document.getElementById('client').disabled, resH.textContent);
+    await stage({ bookings: [] });                 // leave the mock clean
+
   } catch (e) {
     results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
   }
