@@ -5,11 +5,16 @@
  *
  *   Phase 1 (LIVE): finalize a completed rental — file the JSON record to
  *     Drive, append one row to a Google Sheet, email the customer their copy.
- *   Phase 2 (this update): cloud draft sync for cross-device handoff —
+ *   Phase 2 (LIVE): cloud draft sync for cross-device handoff —
  *     saveDraft / getActive / deleteDraft keep in-progress rentals in a Drive
  *     "Pontoon Drafts" folder so any device can list and resume an open rental.
  *     Plus a 6-month retention sweep that ARCHIVES (never silently deletes)
  *     old finalized records.
+ *   Phase 3 (this update): FareHarbor booking lookup — getTodaysBookings
+ *     scans Gmail for FareHarbor notification emails (no FareHarbor API),
+ *     reconstructs today's real PONTOON bookings (new / rebooked / cancelled,
+ *     latest email wins), and serves them to the form's reservation-advisory
+ *     auto-fill. Read-only: touches no Drive files, sends no email.
  *
  * DEPLOY STEPS (Brady)
  * 1. Go to https://script.google.com → open the existing "Baxstar Pontoon
@@ -17,7 +22,13 @@
  * 2. Replace Code.gs with this entire file. Save.
  * 3. Run "setupCheck" once from the toolbar (▶) and authorize Drive/Sheets/
  *    Gmail when asked. It creates the Pontoon Rentals folder + log Sheet AND
- *    the Pontoon Drafts folder if they don't exist yet.
+ *    the Pontoon Drafts folder if they don't exist yet. (Phase 3 adds a Gmail
+ *    READ scope — the authorize prompt will reappear once even on an existing
+ *    deployment. setupCheck now also runs a live getTodaysBookings and logs
+ *    what it found, so you can sanity-check the Gmail scan from the editor.)
+ * 3b. (Phase 3) Project Settings (gear icon) → check the script time zone is
+ *    America/Chicago. The Gmail scan matches "today" using the script TZ; a
+ *    UTC-set project would roll to the wrong day in the evening.
  * 4. (Retention, optional but recommended) Run "setupRetention" once and
  *    authorize when asked. It installs a monthly trigger that ARCHIVES
  *    finalized records older than 6 months into "Pontoon Rentals Archive".
@@ -34,6 +45,9 @@
  * 6. Live test: finalize a test rental with all four signatures → confirm the
  *    JSON in Drive, the Sheet row, and the email. For Phase 2, save a draft on
  *    one device and confirm it appears under "Saved" on a second device.
+ *    For Phase 3, GET the /exec URL and confirm 'getTodaysBookings' is in the
+ *    actions list, then type a real booked customer's name into the form on a
+ *    day with a pontoon booking and confirm the advisory offers it.
  *
  * SECURITY — honest limits: the form lives in a public GitHub repo, so the
  * /exec URL and TOKEN are both publicly readable. The token stops casual abuse
@@ -49,6 +63,11 @@
  *     with "data:image/". That is usable as an outbound mail relay for
  *     phishing and can burn the daily Gmail quota (blocking real customer
  *     copies). It also creates junk record files and Sheet rows.
+ *   - (Phase 3) Anyone with the public token can fetch TODAY'S pontoon
+ *     bookings — customer name, phone, email, booking #. Same PII class the
+ *     draft listing already exposes; scope is limited to today + pontoon
+ *     items only, and the action is strictly read-only (no Drive writes, no
+ *     mail sends, bounded Gmail searches).
  * Mitigations if ever needed: rebuild the email body server-side from
  * structured fields, rate-limit finalize emails via CacheService, or require
  * a per-draft secret for fetch mode.
@@ -66,7 +85,20 @@ var CONFIG = {
   LOG_SHEET_NAME: 'Pontoon_Rentals_Log',
   EMAIL_SUBJECT: 'Your Baxstar Outdoors pontoon rental record',
   // Finalized records older than this are archived by the retention sweep.
-  RETENTION_MONTHS: 6
+  RETENTION_MONTHS: 6,
+  // ---- Phase 3: FareHarbor Gmail scan ----
+  // Operator notifications sender. All parsed email MUST be from here.
+  FAREHARBOR_SENDER: 'messages@fareharbor.com',
+  // Only bookings whose item name matches this serve the pontoon form —
+  // a fishing-trip booking # must never auto-fill a pontoon check-in.
+  FAREHARBOR_ITEM_FILTER: /pontoon/i,
+  // Result cache. Keeps repeated keystroke-triggered lookups (and several
+  // devices) from re-running Gmail searches; worst case a cancellation is
+  // served this many seconds stale.
+  LOOKUP_CACHE_SECONDS: 120,
+  // Bounds so a runaway inbox can't blow the 30s Apps Script budget.
+  LOOKUP_MAX_THREADS: 50,
+  LOOKUP_MAX_VERIFY_IDS: 10
 };
 
 var LOG_HEADERS = [
@@ -100,6 +132,8 @@ function doPost(e) {
         return jsonOut(handleGetActive(data));
       case 'deleteDraft':
         return jsonOut(handleDeleteDraft(data));
+      case 'getTodaysBookings':
+        return jsonOut(handleGetTodaysBookings(data));
       default:
         return jsonOut({ ok: false, error: 'Unknown action: ' + String(data.action) });
     }
@@ -113,7 +147,7 @@ function doGet() {
   return jsonOut({
     ok: true,
     service: 'baxstar-pontoon-filing',
-    actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft']
+    actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings']
   });
 }
 
@@ -383,6 +417,293 @@ function removeDraftFile(rentalId) {
   return true;
 }
 
+/* ---- PHASE 3: FAREHARBOR BOOKING LOOKUP (Gmail scan) ------------------------
+   No FareHarbor API. FareHarbor emails Brady an operator notification for
+   every booking event from messages@fareharbor.com; this reconstructs today's
+   pontoon bookings from those emails.
+
+   Email anatomy (verified against Brady's real inbox 2026-07-09):
+     New:       subject "New booking: <Item> on <Weekday>, <Month D, YYYY> at
+                <h:mm am[ - h:mm pm]>" (online bookings say "New online
+                booking:"). Body: "Booking #N" heading, then "Name:" and
+                OPTIONAL "Phone:" / "Email:" lines — staff-entered bookings
+                usually have no customer email.
+     Rebooked:  subject "Rebooked: <Item> on <NEW date/time>". Rebooking
+                issues a NEW booking id: the body header is "Booking #OLD
+                Rebooked" and the main section describes the NEW booking
+                ("Booking #NEW"). The OLD id is dead from that moment.
+                The old date appears in the body's Old/New table, so a
+                date-phrase Gmail search still surfaces rebook-AWAYS.
+     Cancelled: subject "Booking #N Cancelled (<Item> on <date>)".
+     Noise:     manifests, "starting in 1 day" reminders, support threads,
+                login codes, customer-facing copies — all ignored by
+                classification, never parsed into bookings.
+
+   Safety posture (this feature replaces a mock that once auto-filled FAKE
+   booking numbers into real records — never again):
+     - only emails from FAREHARBOR_SENDER are parsed;
+     - only items matching FAREHARBOR_ITEM_FILTER are served (a fishing-trip
+       booking # must never land on a pontoon check-in);
+     - events merge latest-email-wins per booking id; cancelled and
+       rebooked-away ids are dropped;
+     - each surviving id gets a per-id verification search as a second chance
+       to catch a cancel/rebook the date search missed;
+     - booking ids must match /^\d{5,12}$/ or the record is dropped;
+     - any search/parse failure returns ok:false — the form then says
+       "couldn't verify", it never silently guesses.
+
+   Everything below except handleGetTodaysBookings/setupCheck is a PURE
+   function (no Apps Script services) so the whole parse/merge pipeline runs
+   under plain JavaScriptCore in .devtest/test_phase3_backend.js. */
+
+// Strip an HTML email body to line-oriented text the field regexes can read.
+function fhStripHtml(html) {
+  var s = String(html || '');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, ' ')
+       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+       .replace(/<!--[\s\S]*?-->/g, ' ');
+  // Block-level closers and <br> become newlines; inline tags just vanish
+  // (so "<b>Name:</b> Jo" stays on one line).
+  s = s.replace(/<br\s*\/?\s*>/gi, '\n')
+       .replace(/<\/(p|div|td|tr|table|h1|h2|h3|h4|li|thead|tbody)\s*>/gi, '\n')
+       .replace(/<[^>]+>/g, '');
+  s = s.replace(/&nbsp;/gi, ' ')
+       .replace(/&amp;/gi, '&')
+       .replace(/&#0?39;/g, "'")
+       .replace(/&quot;/gi, '"')
+       .replace(/&ndash;/gi, '–')
+       .replace(/&mdash;/gi, '—')
+       .replace(/&raquo;/gi, '»')
+       .replace(/&bull;/gi, '•')
+       .replace(/&lt;/gi, '<')
+       .replace(/&gt;/gi, '>');
+  var lines = s.split('\n');
+  var out = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    if (line) out.push(line);
+  }
+  return out.join('\n');
+}
+
+// "8:00 am" → "08:00"; "12:15 pm" → "12:15"; "12:00 am" → "00:00".
+// Returns '' for anything it doesn't recognize.
+function fhTo24h(t) {
+  var m = /^(\d{1,2}):(\d{2})\s*([ap])m$/i.exec(String(t || '').trim());
+  if (!m) return '';
+  var h = Number(m[1]), min = m[2], pm = m[3].toLowerCase() === 'p';
+  if (h < 1 || h > 12) return '';
+  if (h === 12) h = 0;
+  if (pm) h += 12;
+  return (h < 10 ? '0' : '') + h + ':' + min;
+}
+
+var FH_MONTHS = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+};
+
+// "July 9, 2026" (or "<Weekday>, July 9, 2026") → {y, m, d, iso} or null.
+function fhParseDatePhrase(phrase) {
+  var m = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/.exec(String(phrase || ''));
+  if (!m) return null;
+  var mon = FH_MONTHS[m[1].toLowerCase()];
+  if (!mon) return null;
+  var d = Number(m[2]), y = Number(m[3]);
+  if (d < 1 || d > 31) return null;
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  return { y: y, m: mon, d: d, iso: y + '-' + pad(mon) + '-' + pad(d) };
+}
+
+// Subject tail shared by New/Rebooked subjects:
+//   "<Item> on <Weekday>, <Month D, YYYY> at <h:mm am>[ - <h:mm pm>]"
+// Greedy item match means an item name containing " on " still parses:
+// backtracking anchors on the LAST " on <Weekday>, ...".
+var FH_SUBJECT_TAIL =
+  /^(.+) on [A-Za-z]+day, ([A-Za-z]+ \d{1,2}, \d{4}) at (\d{1,2}:\d{2} [ap]m)(?: - (\d{1,2}:\d{2} [ap]m))?$/;
+
+// Classify + parse one email into an event, or null if it's noise/malformed.
+// PURE: subject + html body + epoch ms in, event out.
+//   {kind:'new',       atMs, booking:{...}}
+//   {kind:'rebooked',  atMs, oldId, booking:{...the NEW booking...}}
+//   {kind:'cancelled', atMs, bookingId}
+function fhParseEmail(subject, htmlBody, atMs) {
+  var subj = String(subject || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+  atMs = Number(atMs || 0);
+
+  var cancelled = /^Booking #(\d{5,12}) Cancelled\b/.exec(subj);
+  if (cancelled) return { kind: 'cancelled', atMs: atMs, bookingId: cancelled[1] };
+
+  var isNew = /^New (?:online )?booking: /.test(subj);
+  var isRebook = /^Rebooked: /.test(subj);
+  if (!isNew && !isRebook) return null;   // manifests, reminders, support, …
+
+  var tail = FH_SUBJECT_TAIL.exec(subj.replace(/^New (?:online )?booking: |^Rebooked: /, ''));
+  if (!tail) return null;                 // recognized prefix but unparseable
+  var date = fhParseDatePhrase(tail[2]);
+  var start = fhTo24h(tail[3]);
+  if (!date || !start) return null;
+  var end = tail[4] ? fhTo24h(tail[4]) : '';
+
+  var text = fhStripHtml(htmlBody);
+  var ids = [];
+  var idRe = /Booking\s*#\s*(\d{5,12})/g, im;
+  while ((im = idRe.exec(text))) ids.push(im[1]);
+  if (!ids.length) return null;
+
+  var field = function (label) {
+    var fm = new RegExp('^' + label + ':\\s*(.+)$', 'm').exec(text);
+    return fm ? fm[1].replace(/^\s+|\s+$/g, '') : '';
+  };
+  var email = field('Email');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = '';
+
+  var booking = {
+    // Rebooked emails contain "Booking #OLD Rebooked" first and the NEW
+    // "Booking #NEW" section last; new-booking emails have exactly one.
+    bookingId: ids[ids.length - 1],
+    name: field('Name').slice(0, 200),
+    phone: field('Phone').slice(0, 40),
+    email: email.slice(0, 200),
+    item: tail[1].replace(/^\s+|\s+$/g, '').slice(0, 200),
+    date: date.iso,
+    start: start,
+    end: end,
+    multiDay: !end || /multi[\s–—-]*day/i.test(tail[1]),
+    createdBy: field('Created by').slice(0, 200)
+  };
+  if (!booking.name) return null;         // a booking we can't name-match is useless
+
+  if (isRebook) {
+    var oldM = /Booking\s*#\s*(\d{5,12})\s+Rebooked/.exec(text);
+    return { kind: 'rebooked', atMs: atMs, oldId: oldM ? oldM[1] : '', booking: booking };
+  }
+  return { kind: 'new', atMs: atMs, booking: booking };
+}
+
+// Merge events (any order) into the surviving bookings for `todayIso`
+// ("yyyy-mm-dd"). Latest email wins per id; cancelled/superseded ids drop;
+// only pontoon items on today's date survive. PURE.
+function fhMergeEvents(events, todayIso) {
+  var sorted = (events || []).slice().sort(function (a, b) { return (a.atMs || 0) - (b.atMs || 0); });
+  var state = {};
+  var touch = function (id) {
+    if (!state[id]) state[id] = { booking: null, cancelled: false, superseded: false };
+    return state[id];
+  };
+  for (var i = 0; i < sorted.length; i++) {
+    var ev = sorted[i];
+    if (!ev) continue;
+    if (ev.kind === 'cancelled') {
+      touch(ev.bookingId).cancelled = true;
+    } else if (ev.kind === 'new') {
+      var sn = touch(ev.booking.bookingId);
+      sn.booking = ev.booking;
+      // A duplicate/re-send of the confirmation does NOT resurrect a
+      // cancelled id — cancellation is terminal for that id.
+    } else if (ev.kind === 'rebooked') {
+      // Observed format: a rebook issues a NEW id and kills the old one. If
+      // FareHarbor ever re-uses the id (time-only change), don't let the
+      // booking supersede itself.
+      if (ev.oldId && ev.oldId !== ev.booking.bookingId) touch(ev.oldId).superseded = true;
+      var sr = touch(ev.booking.bookingId);
+      sr.booking = ev.booking;
+    }
+  }
+  var out = [];
+  for (var id in state) {
+    var s = state[id];
+    if (!s.booking || s.cancelled || s.superseded) continue;
+    if (s.booking.date !== todayIso) continue;
+    if (!CONFIG.FAREHARBOR_ITEM_FILTER.test(s.booking.item)) continue;
+    if (!/^\d{5,12}$/.test(s.booking.bookingId)) continue;
+    out.push(s.booking);
+  }
+  out.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+  return out;
+}
+
+// Pull parse-able events out of Gmail threads. Non-FareHarbor senders and
+// noise subjects contribute nothing; one malformed email never poisons the
+// batch (it is skipped, not fatal).
+function fhEventsFromThreads(threads) {
+  var events = [];
+  for (var t = 0; t < threads.length; t++) {
+    var msgs = threads[t].getMessages();
+    for (var m = 0; m < msgs.length; m++) {
+      var msg = msgs[m];
+      if (String(msg.getFrom()).toLowerCase().indexOf(CONFIG.FAREHARBOR_SENDER) === -1) continue;
+      var ev = null;
+      try { ev = fhParseEmail(msg.getSubject(), msg.getBody(), msg.getDate().getTime()); }
+      catch (err) { ev = null; }
+      if (ev) events.push(ev);
+    }
+  }
+  return events;
+}
+
+// { action:'getTodaysBookings' } → { ok:true, date:'yyyy-mm-dd', bookings:[
+//   { bookingId, name, phone, email, item, date, start, end, multiDay,
+//     createdBy } ] }
+// start/end are 24h "HH:MM" (ready for the form's <input type="time">).
+// STRICTLY READ-ONLY: no Drive writes, no mail. Errors → { ok:false }.
+function handleGetTodaysBookings(data) {
+  var tz = Session.getScriptTimeZone();
+  var now = new Date();
+  var todayIso = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+  var datePhrase = Utilities.formatDate(now, tz, 'MMMM d, yyyy');
+
+  var cache = null, cacheKey = 'fh_bookings_' + todayIso;
+  try { cache = CacheService.getScriptCache(); } catch (errCache) { cache = null; }
+  if (cache) {
+    var hit = cache.get(cacheKey);
+    if (hit) { try { return JSON.parse(hit); } catch (errHit) {} }
+  }
+
+  var result;
+  try {
+    // Pass 1: everything FareHarbor sent that mentions today's date phrase.
+    // New bookings and cancellations carry it in the subject; a rebook AWAY
+    // from today carries it in the body's Old/New table — Gmail full-text
+    // search matches bodies, so all three surface here.
+    var query = 'from:' + CONFIG.FAREHARBOR_SENDER + ' "' + datePhrase + '"';
+    var threads = GmailApp.search(query, 0, CONFIG.LOOKUP_MAX_THREADS);
+    var events = fhEventsFromThreads(threads);
+    var bookings = fhMergeEvents(events, todayIso);
+
+    // Pass 2: per-id verification — a targeted search per surviving id
+    // catches any cancel/rebook the date search missed (odd formatting,
+    // clipped body, future template drift). Merge re-runs with the extra
+    // events so ordering stays time-based.
+    var verified = bookings;
+    if (bookings.length) {
+      var extra = [];
+      var limit = Math.min(bookings.length, CONFIG.LOOKUP_MAX_VERIFY_IDS);
+      for (var i = 0; i < limit; i++) {
+        var idThreads = GmailApp.search(
+          'from:' + CONFIG.FAREHARBOR_SENDER + ' "' + bookings[i].bookingId + '"', 0, 10);
+        extra = extra.concat(fhEventsFromThreads(idThreads));
+      }
+      verified = fhMergeEvents(events.concat(extra), todayIso);
+      if (bookings.length > CONFIG.LOOKUP_MAX_VERIFY_IDS) {
+        // Never serve more than we could verify.
+        verified = verified.slice(0, CONFIG.LOOKUP_MAX_VERIFY_IDS);
+      }
+    }
+
+    result = { ok: true, date: todayIso, bookings: verified };
+  } catch (err) {
+    // Honest failure: the form shows "couldn't verify — enter manually".
+    return { ok: false, error: 'Booking lookup failed: ' + String(err && err.message || err) };
+  }
+
+  if (cache) {
+    try { cache.put(cacheKey, JSON.stringify(result), CONFIG.LOOKUP_CACHE_SECONDS); }
+    catch (errPut) {}
+  }
+  return result;
+}
+
 /* ---- DRIVE / SHEET PLUMBING ------------------------------------------------ */
 
 function getRentalsFolder() {
@@ -520,4 +841,7 @@ function setupCheck() {
   Logger.log('Drafts folder ready: ' + drafts.getName() + ' (' + drafts.getUrl() + ')');
   Logger.log('Log sheet ready: ' + sheet.getParent().getUrl());
   Logger.log('Gmail quota remaining today: ' + MailApp.getRemainingDailyQuota());
+  // Phase 3: exercise the Gmail READ scope + show what today's scan finds.
+  var lookup = handleGetTodaysBookings({});
+  Logger.log('FareHarbor lookup (today): ' + JSON.stringify(lookup));
 }
