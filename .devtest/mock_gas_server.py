@@ -25,6 +25,10 @@ LOG = open('mock_log.jsonl', 'a')
 
 # In-memory stand-in for the Drive "Pontoon Drafts" folder, keyed by rentalId.
 DRAFTS = {}
+# Mirror of Code.gs tombstones: {rentalId: epoch_ms}. A saveDraft whose
+# updatedAt <= the stamp is acknowledged but ignored (tombstoned: true);
+# a newer one clears the stamp and is accepted.
+TOMBSTONES = {}
 
 # Phase 3: what getTodaysBookings serves. Tests stage this via /__set_bookings.
 BOOKINGS = {'fail': False, 'bookings': []}
@@ -102,6 +106,7 @@ class Handler(BaseHTTPRequestHandler):
             DRAFTS.clear()
             BOOKINGS['fail'] = False
             BOOKINGS['bookings'] = []
+            TOMBSTONES.clear()
             log({'method': 'POST', 'path': '/__reset', 'cleared': True})
             self._respond(200, {'ok': True})
             return
@@ -175,6 +180,8 @@ class Handler(BaseHTTPRequestHandler):
         # A confirmed filing drops the in-progress draft (mirror of Code.gs).
         rid = data.get('rentalId', '')
         draft_removed = DRAFTS.pop(rid, None) is not None
+        if rid:
+            TOMBSTONES[rid] = now_ms()
         emailed = bool((data.get('customerEmail') or '').strip())
         self._respond(200, {'ok': True, 'rentalId': rid,
                             'fileUrl': 'mock://drive/' + (data.get('filename') or 'record'),
@@ -190,6 +197,15 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(200, {'ok': False, 'error': 'saveDraft: missing state'})
             return
         updated = int(data.get('updatedAt') or 0) or now_ms()
+        ts = TOMBSTONES.get(rid)
+        if ts is not None:
+            if updated <= ts:
+                log({'method': 'POST', 'action': 'saveDraft', 'rentalId': rid,
+                     'tombstoned': True})
+                self._respond(200, {'ok': True, 'rentalId': rid,
+                                    'updatedAt': updated, 'tombstoned': True})
+                return
+            del TOMBSTONES[rid]
         prev = int((DRAFTS.get(rid) or {}).get('updatedAt', 0))
         DRAFTS[rid] = {
             'rentalId': rid, 'updatedAt': updated,
@@ -237,6 +253,7 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(200, {'ok': False, 'error': 'deleteDraft: missing rentalId'})
             return
         removed = DRAFTS.pop(rid, None) is not None
+        TOMBSTONES[rid] = now_ms()
         log({'method': 'POST', 'action': 'deleteDraft', 'rentalId': rid, 'removed': removed})
         self._respond(200, {'ok': True, 'rentalId': rid, 'removed': removed})
 

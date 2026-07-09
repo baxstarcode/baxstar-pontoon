@@ -73,6 +73,11 @@ function setOnline(w, on) {
 
 async function main() {
   try {
+    // Idempotency: clear the mock's drafts/bookings/tombstones from any prior
+    // run. Tombstones made this mandatory — scenarios E/F/G reuse FIXED
+    // rentalIds, and a leftover tombstone from the last run would (correctly!)
+    // refuse their back-dated saveDraft calls.
+    try { await fetch('http://localhost:8809/__reset', { method: 'POST' }); } catch (e) {}
     let f = await loadFrame('form_phase2.html');
     let w = f.contentWindow;
     w.localStorage.clear();
@@ -299,6 +304,61 @@ async function main() {
     resH = w.document.getElementById('res-status');
     t("H: lookup failure shows couldn't-verify (never a silent guess)", !resH.hidden && resH.className.includes('res-error') && !w.document.getElementById('client').disabled, resH.textContent);
     await stage({ bookings: [] });                 // leave the mock clean
+
+    /* ===== T1 — tombstones: a stale copy can't resurrect a deleted rental =====
+       The Dustin two-phone case: this device holds a local copy, the rental
+       gets deleted from ANOTHER device (tombstone set cloud-side), then this
+       device re-pushes its stale copy. */
+    w.newRental();
+    setVal(w, 'client', 'Zombie Tester');
+    setCheck(w, 'safety-3', true);
+    w.saveNow();
+    const idH = w.getAllRentals().find(r => r.state.inputs.client === 'Zombie Tester').id;
+    w.enqueueDraftOp(idH, 'save');
+    await w.processDraftQueue();
+    let clH = await mock({ action: 'getActive' });
+    t('T1: draft in cloud before the cross-device delete', clH.drafts.some(d => d.rentalId === idH));
+    // Move OFF the rental and let every pending save timer settle BEFORE the
+    // cross-device delete: the stale copy's updatedAt must predate the
+    // tombstone (in real life it's days older). Doing the delete first let
+    // newRental's own save flush bump updatedAt past the tombstone, which the
+    // backend rightly treats as a deliberate newer edit — a test artifact.
+    w.newRental();
+    await sleep(600);
+    await w.processDraftQueue();
+    await mock({ action: 'deleteDraft', rentalId: idH });   // "the other phone" deletes it
+    w.enqueueDraftOp(idH, 'save');                          // the stale re-push
+    await w.processDraftQueue();
+    await sleep(200);
+    t('T1: stale re-push acknowledged — queue drains, no retry loop', !w.getDraftQueue().some(e => e.rentalId === idH), JSON.stringify(w.getDraftQueue()));
+    clH = await mock({ action: 'getActive' });
+    t('T1: zombie did NOT reappear in the cloud', !clH.drafts.some(d => d.rentalId === idH), JSON.stringify(clH.drafts));
+    t('T1: stale local copy auto-removed', !w.getAllRentals().some(r => r.id === idH));
+    t('T1: no zombie row in the Saved list', !/Zombie Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+
+    /* ===== T2 — a NEWER edit deliberately resurrects (unlock-and-edit case) ===== */
+    w.newRental();
+    setVal(w, 'client', 'Lazarus Tester');
+    setCheck(w, 'safety-4', true);
+    w.saveNow();
+    const idI = w.getAllRentals().find(r => r.state.inputs.client === 'Lazarus Tester').id;
+    w.enqueueDraftOp(idI, 'save');
+    await w.processDraftQueue();
+    await mock({ action: 'deleteDraft', rentalId: idI });   // tombstone set
+    await sleep(60);                                        // ensure the edit out-dates the tombstone
+    setVal(w, 'out-notes', 'edited after the delete');
+    w.saveNow();                                            // bumps updatedAt past the tombstone
+    w.enqueueDraftOp(idI, 'save');
+    await w.processDraftQueue();
+    let clI = await mock({ action: 'getActive' });
+    t('T2: newer edit clears the tombstone and re-syncs', clI.drafts.some(d => d.rentalId === idI), JSON.stringify(clI.drafts));
+    t('T2: local copy kept (open rental with fresh work)', w.getAllRentals().some(r => r.id === idI));
+
+    /* ===== T3 — finalize also tombstones (stale copy can't reopen a filed rental) ===== */
+    const oldPush = await mock({ action: 'saveDraft', rentalId: idA, updatedAt: 1000, client: 'Handoff Tester', state: stateStub });
+    t('T3: stale push against a FINALIZED rental is acknowledged but ignored', oldPush.ok === true && oldPush.tombstoned === true, JSON.stringify(oldPush));
+    const clT3 = await mock({ action: 'getActive' });
+    t('T3: filed rental does not reappear as a draft', !clT3.drafts.some(d => d.rentalId === idA));
 
   } catch (e) {
     results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));

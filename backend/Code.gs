@@ -10,11 +10,19 @@
  *     "Pontoon Drafts" folder so any device can list and resume an open rental.
  *     Plus a 6-month retention sweep that ARCHIVES (never silently deletes)
  *     old finalized records.
- *   Phase 3 (this update): FareHarbor booking lookup — getTodaysBookings
+ *   Phase 3 (LIVE): FareHarbor booking lookup — getTodaysBookings
  *     scans Gmail for FareHarbor notification emails (no FareHarbor API),
  *     reconstructs today's real PONTOON bookings (new / rebooked / cancelled,
  *     latest email wins), and serves them to the form's reservation-advisory
  *     auto-fill. Read-only: touches no Drive files, sends no email.
+ *   Tombstones (this update): when a rental is finalized or its draft deleted,
+ *     the rentalId is tombstoned (Script Properties, timestamped). A stale
+ *     phone re-pushing its old local copy gets an OK-but-ignored response
+ *     (tombstoned: true) instead of resurrecting the draft — this kills the
+ *     "zombie draft reappears from the other phone" problem and the manual
+ *     refresh-the-other-phone rule. A push NEWER than the tombstone (e.g.
+ *     Brady unlocks a finalized record and edits it) clears the tombstone and
+ *     is accepted — deliberate resurrection stays possible.
  *
  * DEPLOY STEPS (Brady)
  * 1. Go to https://script.google.com → open the existing "Baxstar Pontoon
@@ -143,10 +151,13 @@ function doPost(e) {
 }
 
 // Sanity check in a browser: the /exec URL should show this JSON.
+// `version` bumps with behavior changes so a deploy can be verified from a
+// browser — tombstones-1 means stale-copy resurrection is blocked.
 function doGet() {
   return jsonOut({
     ok: true,
     service: 'baxstar-pontoon-filing',
+    version: 'phase3+tombstones-1',
     actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings']
   });
 }
@@ -174,10 +185,12 @@ function handleFinalize(p) {
     try { appendLogRow(folder, p, file, email); }
     catch (errLog) { logRowOk = false; }
     // The rental is now permanently filed — drop any in-progress cloud draft
-    // for it so it stops showing as "open" on other devices. Best-effort:
+    // for it so it stops showing as "open" on other devices, and tombstone
+    // the id so a stale phone's old copy can't resurrect it. Best-effort:
     // a draft-cleanup hiccup must never fail an otherwise-good filing.
     var draftRemoved = false;
     try { draftRemoved = removeDraftFile(String(p.rentalId || '')); } catch (err2) {}
+    try { addTombstone(String(p.rentalId || '')); } catch (err3) {}
     return {
       ok: true,
       rentalId: String(p.rentalId || ''),
@@ -351,6 +364,18 @@ function handleSaveDraft(data) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
+    // Tombstone gate: if this rental was finalized/deleted AFTER this copy
+    // was last edited, the push is a stale phone resurrecting a zombie —
+    // acknowledge it (ok:true so the sender's retry queue drains) but write
+    // nothing, and tell the sender so it can drop its stale local copy.
+    // A NEWER write than the tombstone is deliberate (e.g. unlock-and-edit
+    // of a finalized record): clear the tombstone and accept it.
+    var ts = tombstoneTime(rentalId);
+    if (ts && updatedAt <= ts) {
+      return { ok: true, rentalId: rentalId, updatedAt: updatedAt, tombstoned: true };
+    }
+    if (ts) clearTombstone(rentalId);
+
     var folder = getDraftsFolder();
     var file = findDraftFile(folder, rentalId);
     var previousUpdatedAt = 0;
@@ -385,6 +410,7 @@ function handleGetActive(data) {
   }
 
   var drafts = [];
+  var stones = loadTombstones();
   var it = folder.getFiles();
   while (it.hasNext()) {
     var f = it.next();
@@ -393,7 +419,11 @@ function handleGetActive(data) {
     // DELETED draft keeps showing on every device until Trash purges (~30d),
     // which reproduces the "delete didn't take" live symptom by itself.
     if (f.isTrashed()) continue;
-    drafts.push(draftMeta(f));
+    var meta = draftMeta(f);
+    // Belt + suspenders: a tombstoned id should have no live file (saveDraft
+    // refuses stale writes), but never list one if it somehow exists.
+    if (stones[meta.rentalId] !== undefined) continue;
+    drafts.push(meta);
   }
   drafts.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
   return { ok: true, drafts: drafts };
@@ -402,8 +432,17 @@ function handleGetActive(data) {
 function handleDeleteDraft(data) {
   var rentalId = String(data.rentalId || '').trim();
   if (!rentalId) return { ok: false, error: 'deleteDraft: missing rentalId' };
-  var removed = removeDraftFile(rentalId);
-  return { ok: true, rentalId: rentalId, removed: removed };
+  // Lock: tombstone read-modify-write must not interleave with a concurrent
+  // saveDraft (this also closes the old "deleteDraft takes no lock" gap).
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var removed = removeDraftFile(rentalId);
+    addTombstone(rentalId);
+    return { ok: true, rentalId: rentalId, removed: removed };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Trash the draft file for a rentalId. Returns whether one was found.
@@ -712,6 +751,52 @@ function handleGetTodaysBookings(data) {
     catch (errPut) {}
   }
   return result;
+}
+
+/* ---- TOMBSTONES -------------------------------------------------------------
+   { rentalId: epochMs } map in Script Properties, stamped when a rental is
+   finalized or its draft deleted. saveDraft compares the incoming copy's
+   updatedAt against the stamp: older-or-equal = a stale phone re-pushing a
+   zombie (acknowledged, ignored); newer = a deliberate resurrection (tombstone
+   cleared, accepted). Entries self-prune after 90 days — no phone plausibly
+   re-syncs a draft older than that, and drafts themselves never live that long.
+   Callers that WRITE (add/clear) must hold the script lock; reads are safe. */
+
+var TOMBSTONE_PROP = 'TOMBSTONES';
+var TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+function loadTombstones() {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty(TOMBSTONE_PROP) || '{}') || {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function saveTombstones(map) {
+  PropertiesService.getScriptProperties().setProperty(TOMBSTONE_PROP, JSON.stringify(map));
+}
+
+function addTombstone(rentalId) {
+  if (!rentalId) return;
+  var map = loadTombstones();
+  var cutoff = Date.now() - TOMBSTONE_TTL_MS;
+  for (var id in map) { if (Number(map[id]) < cutoff) delete map[id]; }
+  map[rentalId] = Date.now();
+  saveTombstones(map);
+}
+
+function clearTombstone(rentalId) {
+  var map = loadTombstones();
+  if (map[rentalId] !== undefined) {
+    delete map[rentalId];
+    saveTombstones(map);
+  }
+}
+
+function tombstoneTime(rentalId) {
+  var v = loadTombstones()[rentalId];
+  return v === undefined ? 0 : Number(v);
 }
 
 /* ---- DRIVE / SHEET PLUMBING ------------------------------------------------ */

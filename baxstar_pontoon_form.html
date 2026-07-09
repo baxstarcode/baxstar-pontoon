@@ -1937,7 +1937,24 @@
               hasCheckIn: meta.hasCheckIn,
               state: r.state
             });
-            recordCloudSynced(r.id, res.updatedAt);
+            if (res.tombstoned) {
+              // The cloud refused this copy: the rental was finalized or
+              // deleted from another device AFTER this copy was last edited
+              // (the stale-zombie case). Drop the stale local copy — but
+              // never the rental open right now (its next edit out-dates the
+              // tombstone and syncs normally), and never a locally-finalized
+              // record (that's a filed document, not ours to remove).
+              if (entry.rentalId !== currentRentalId) {
+                const cur = getAllRentals();
+                const di = cur.findIndex(x => x.id === entry.rentalId);
+                if (di !== -1 && !cur[di].finalized) {
+                  cur.splice(di, 1);
+                  saveAllRentals(cur);
+                }
+              }
+            } else {
+              recordCloudSynced(r.id, res.updatedAt);
+            }
           }
           handled.add(qkey(entry));
           lastCloudOk = true;
