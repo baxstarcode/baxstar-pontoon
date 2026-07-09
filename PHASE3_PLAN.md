@@ -37,30 +37,24 @@ bookings MUST be filtered out (wrong booking # for a pontoon check-in).
 - Any parse/search failure → ok:false → form shows the existing
   "couldn't verify" advisory. Never a silent wrong answer.
 
-## Checklist
+## Checklist — ALL DONE on mocks (2026-07-09 overnight run)
 - [x] 1. Capture real email formats (4 variants + noise inventory)
-- [ ] 2. `backend/Code.gs` — pure parse/merge functions + `getTodaysBookings`
-        action + doGet actions list; complete replacement file
-- [ ] 3. Parser/merge unit suite runnable WITHOUT Chrome (JavaScriptCore
-        `jsc`, display-sleep-proof): `.devtest/test_phase3_backend.js` with
-        fake-GmailApp inbox fixtures — FICTIONAL customer data only (repo is
-        public). Cases: well-formed online booking; staff booking w/o email;
-        malformed email; zero-bookings-today; duplicate confirmations;
-        cancelled; rebooked-to-today; rebooked-away; non-pontoon filtered;
-        noise ignored; ID charset; multi-day (no end time)
-- [ ] 4. Form — `fetchTodaysReservations()` calls `getTodaysBookings`
-        (webhookConfigured-gated, 60s client cache, field whitelist +
-        ID validation); `applyReservation` additionally fills empty
-        email field; advisory shows item; complete replacement file
-- [ ] 5. `.devtest/mock_gas_server.py` — `getTodaysBookings` action with
-        settable fixture (`/_set_bookings` test hook)
-- [ ] 6. Browser suites: extend Scenario B for server-shape data + email
-        fill; full regression — main 78+new/0, cloud 34/0 (needs awake
-        display; run opportunistically, fall back to jsc coverage + morning
-        note if Chrome hangs)
-- [ ] 7. Hostile self-review of full diff (hunt: any path where unverified/
-        stale booking # looks verified)
-- [ ] 8. MORNING_REPORT.md
+- [x] 2. `backend/Code.gs` — pure parse/merge functions + `getTodaysBookings`
+        action + doGet actions list (commit e938335, hardened 37e1500)
+- [x] 3. Chrome-free backend suite under JavaScriptCore:
+        `.devtest/run_phase3_backend_tests.sh` → **58/0** (all planned cases
+        + sender display-name-spoof rejection)
+- [x] 4. Form — real `fetchTodaysReservations()`, email auto-fill, item in
+        advisory (commit 37e1500)
+- [x] 5. Mock server — `getTodaysBookings` + `/__set_bookings` staging hook
+- [x] 6. Browser suites: main **80/0** (was 78), cloud **41/0** (was 34;
+        new Scenario H real-path), race **20/2 expected signature** —
+        all run headless tonight, no display-sleep hang
+- [x] 7. Hostile self-review — found + fixed one real hole: sender check
+        accepted a display-name spoof ('"messages@fareharbor.com" <evil@x>'),
+        which could have served an attacker-crafted booking as verified.
+        Address-only comparison now, with jsc regression tests.
+- [x] 8. MORNING_REPORT.md at repo root
 
 ## Known limitations (by design, for the report)
 - Multi-day rentals are served on their START date only (check-out day).
