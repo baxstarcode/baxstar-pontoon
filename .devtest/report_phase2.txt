@@ -1,0 +1,51 @@
+PASS | DIAG A: rentals after save | [{"id":"r_1783624119520_92bj9p","c":"Handoff Tester"}] active=r_1783624119520_92bj9p
+PASS | A: cloud push queue drains | []
+PASS | A: backend stored the draft | [{"rentalId":"r_1783624119520_92bj9p","client":"Handoff Tester","date":"2026-06-20","pontoon":"Unit 3","updatedAt":1783624119834,"hasCheckIn":false,"finalized":false}]
+PASS | A: list mode is lightweight (no state/signatures)
+PASS | A: list meta carries hasCheckIn=false at checkout
+PASS | A: full draft fetch carries the checkout signature
+PASS | A: full draft has no check-in signature yet
+PASS | B: fresh device has no local rentals | []
+PASS | B: cloud draft shows in Saved panel as a CLOUD row |  <div class="rental-row"> <div class="rental-info"> <div class="rental-name">Handoff Tester<span class="badge cloud">CLOUD</span></div> <div class="rental-meta"
+PASS | DIAG B: rentals after open | [{"id":"r_1783624119520_92bj9p","c":"Handoff Tester"}] active=r_1783624119520_92bj9p idA=r_1783624119520_92bj9p
+PASS | B: opening cloud draft hydrates checkout fields
+PASS | B: original rentalId adopted (no duplicate fork)
+PASS | B: checkout signature restored on this device
+PASS | B: finalize filed the record (send queue drained) | []
+PASS | B: record marked FILED locally
+PASS | B: finalize removed the in-progress cloud draft | []
+PASS | C: draft present in cloud before delete
+PASS | C: deleting the rental removed its cloud draft | []
+PASS | C: no ghost CLOUD row after delete (stale cache pruned) |  <div class="rental-row "> <div class="rental-info"> <div class="rental-name">Handoff Tester<span class="badge dark">FINALIZED</span><span class="badge done">FI
+PASS | C: Saved counter matches visible rows | 1
+PASS | D: push stays queued while offline
+PASS | D: nothing reaches the cloud while offline
+PASS | D: reconnect auto-pushed the queued draft | []
+PASS | E: cloud-only row renders a delete ✕ |  <div class="rental-row current"> <div class="rental-info"> <div class="rental-name">Offline Tester<span class="badge">CURRENT</span><span class="badge cloud">CLOUD</span></div> <div class="rental-met
+PASS | E: ✕ on cloud-only row removes it with no ghost
+PASS | E: cloud-only delete reached the backend | [{"rentalId":"r_1783624123550_9odgss","client":"Offline Tester","date":"2026-07-09","pontoon":"","updatedAt":1783624123553,"hasCheckIn":false,"finalized":false}]
+PASS | E: Saved counter matches visible rows after cloud delete | 2
+PASS | F: cloud-only row visible before offline delete
+PASS | F: offline delete stays queued | [{"rentalId":"r_1750000000002_cldel2","op":"delete","queuedAt":1783624124772,"attempts":0}]
+PASS | F: row + count hide while the delete is queued offline
+PASS | F: nothing deleted in the cloud while offline
+PASS | F: reconnect drains the queued cloud-only delete | []
+PASS | F: still no ghost after the queue drains
+PASS | G: unsafe rentalId is filtered out of the list
+PASS | H: real lookup finds the online booking | ✓ Reservation found: Ada Renter · Pontoon Rental – Single Day · 13:00 · #910000001
+PASS | H: advisory names the item (wrong-item fills must be visible) | ✓ Reservation found: Ada Renter · Pontoon Rental – Single Day · 13:00 · #910000001
+PASS | H: booking # + email + date + start auto-filled from the real record | {"b":"910000001","e":"ada.renter@example.com","d":"2026-07-09","t":"13:00"}
+PASS | H: staff booking (no email in email-less confirmation) fills without email | {"b":"910000002","e":""}
+PASS | H: unmatched name shows walk-up-is-fine | No matching reservation today — walk-up is fine.
+PASS | H: zero-bookings day keeps the advisory silent
+PASS | H: lookup failure shows couldn't-verify (never a silent guess) | Couldn't verify reservation — bookings list unavailable. Enter details manually.
+PASS | T1: draft in cloud before the cross-device delete
+PASS | T1: stale re-push acknowledged — queue drains, no retry loop | []
+PASS | T1: zombie did NOT reappear in the cloud | [{"rentalId":"r_1783624130782_qt64pe","client":"Ada Renter","date":"2026-07-09","pontoon":"","updatedAt":1783624132196,"hasCheckIn":false,"finalized":false},{"rentalId":"r_1783624129037_er795z","clien
+PASS | T1: stale local copy auto-removed
+PASS | T1: no zombie row in the Saved list
+PASS | T2: newer edit clears the tombstone and re-syncs | [{"rentalId":"r_1783624134753_dna04g","client":"Lazarus Tester","date":"2026-07-09","pontoon":"","updatedAt":1783624134828,"hasCheckIn":false,"finalized":false},{"rentalId":"r_1783624130782_qt64pe","c
+PASS | T2: local copy kept (open rental with fresh work)
+PASS | T3: stale push against a FINALIZED rental is acknowledged but ignored | {"ok":true,"rentalId":"r_1783624119520_92bj9p","updatedAt":1000,"tombstoned":true}
+PASS | T3: filed rental does not reappear as a draft
+TOTAL 50 passed, 0 failed/other

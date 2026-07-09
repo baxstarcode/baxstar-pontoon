@@ -1,0 +1,88 @@
+PASS | pinch-zoom: no user-scalable=no / maximum-scale in viewport | width=device-width, initial-scale=1.0
+PASS | reduced-motion media query present in CSS
+PASS | brand color vars --ink/--red/--red-bright defined (black/red pass)
+PASS | signature draws from touch-type pointer events
+PASS | diagram drag/scroll gesture opens no picker
+PASS | two-finger pinch on diagram opens no picker
+PASS | non-tap gestures placed no marks
+PASS | mark picker appears on diagram tap
+PASS | mark coords accurate while page scrolled | [{"x":130,"y":200,"label":"Scratch"},{"x":60,"y":120,"label":"Dent"}]
+PASS | autosave wrote rental to localStorage
+PASS | saved state holds client/date/booking/times/notes
+PASS | saved state holds all 4 signatures
+PASS | saved-indicator flashed (no false positive path) | flash verified by save success; visibility timing is transient
+PASS | FareHarbor link visible + correct href
+PASS | FareHarbor link hides when booking cleared
+PASS | client name escaped in saved list
+PASS | reload restores inputs exactly | {"client":"Mike O'Brien-Smith <test> & co","date":"2026-06-10","pontoon":"Unit 2","booking":"987654","email":"","out-time":"09:15","in-time":"16:45","
+PASS | reload restores checkboxes exactly
+PASS | reload restores marks exactly (count+coords+labels) | {"out":[{"x":130,"y":200,"label":"Scratch"},{"x":60,"y":120,"label":"Dent"}],"in":[]}
+PASS | reload restores all 4 signatures (non-empty canvases)
+PASS | marks re-render as SVG elements after reload
+PASS | beforeunload blocks during unsaved window
+PASS | beforeunload silent after save lands
+PASS | dormant reservation source shows NO advisory (no false walk-up claim)
+PASS | reservation found (case/punct/order-insensitive) | ✓ Reservation found: Jon Carlson · 10:30 · #75312511
+PASS | autofill fills empty booking only, keeps typed time
+PASS | misspelling shows did-you-mean suggestions | Did you mean: Jon Carlson · 10:30 John Carlsen · 13:00
+PASS | suggestion does not autofill until tapped
+PASS | tapping suggestion fills empty fields | 75312511
+PASS | unknown name shows no-match (walk-up ok) | No matching reservation today — walk-up is fine.
+PASS | lookup failure shows couldn't-verify, field stays editable | Couldn't verify reservation — bookings list unavailable. Enter details manually.
+PASS | matcher: exact
+PASS | matcher: ambiguous near-duplicates -> suggest
+PASS | matcher: garbage -> none
+PASS | matcher: empty -> none, no crash
+PASS | finalize on empty form refuses with message | Nothing to finalize — the form is empty.
+PASS | finalize blocks on missing signatures and names them | Cannot finalize yet — missing signatures:
+• Baxstar (check out)
+• Rentee (check in)
+• Baxstar (check in)
+
+Collect the signatures, then finalize. (Filing is refused without them.)
+PASS | signature block does not lock or queue
+PASS | finalize locks the form
+PASS | finalized banner + unlock visible, finalize hidden
+PASS | unset webhook -> record queued locally
+PASS | queue bar explains not-filed state | 1 record saved on this device but not filed yet — filing isn't set up (Apps Script URL not pasted in yet).
+    Retry now
+PASS | list shows FINALIZED + QUEUED badges
+PASS | locked diagram ignores taps
+PASS | locked signature pad ignores strokes
+PASS | lock survives reload
+PASS | unlock re-enables editing
+PASS | unlock drops stale queued payload
+PASS | finalize POST fired once to webhook | 2 total calls, 1 finalize
+PASS | CORS-safe: no custom headers on finalize POST
+PASS | phase3: typing client name fired a booking lookup | 2 calls
+PASS | phase3: lookup POST is CORS-simple + carries token
+PASS | POST body carries action+token for the backend
+PASS | payload: customerEmail field present | maria@example.com
+PASS | payload parses as JSON
+PASS | payload: identity fields complete
+PASS | payload: filename convention | Pontoon_Maria_Gutierrez_2026-06-10_75312602
+PASS | payload: fareharbor url
+PASS | payload: checklists complete (10 safety / 8+8 condition)
+PASS | payload: both notes present
+PASS | payload: marks with type+coords+diagram
+PASS | payload: both signature pairs as data URLs
+PASS | payload: times + summaryText present
+PASS | successful send drains queue
+PASS | successful send marks record FILED
+PASS | list shows FILED badge
+PASS | failed POST keeps record queued
+PASS | failure message visible to user | 1 record saved on this device but not filed yet — last send failed (Failed to fetch); will keep retrying.
+    Retry now
+PASS | walk-up (no booking) still files: payload has empty bookingId
+PASS | backend ok:false rejection keeps record queued | "Cannot file — missing signatures: Rentee (check in)"
+PASS | manual retry drains queue + files record
+PASS | storage failure shows NOT SAVING banner
+PASS | storage failure never flashes Saved ✓
+PASS | unsaved-due-to-quota still guards beforeunload
+PASS | empty list renders placeholder
+PASS | unnamed rental shows (unnamed)
+PASS | duplicate names: separate rows | 3 rows
+PASS | delete current rental recovers to new rental
+PASS | custom mark label stored raw, rendered escaped | {"x":100,"y":100,"label":"<b>\"weird\" & torn</b>"}
+PASS | zero uncaught JS errors across all scenarios
+TOTAL 80 passed, 0 failed/other
