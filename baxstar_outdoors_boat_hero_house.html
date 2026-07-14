@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="indexifembedded">
+<!--
+  BAXSTAR OUTDOORS — "I'M ON A BOAT." show-stopper, BAXSTAR HOUSE EDITION (V3 · 2026-07-13)
+  Built to match baxstarfishing.com's live section design system (tokens lifted from the
+  coverage map / V2 sections): near-black #08080a, 64px grid texture, red #e63946/#c1272d
+  with glow, bone/pearl text, Bebas Neue display + Barlow Condensed tactical + Cormorant italic.
+  Placement: baxstaroutdoors.com homepage, directly below the hero (Wix Custom HTML embed).
+  Suggested initial iframe height in Wix: 560px desktop / 540px mobile.
+  CTA URL verified 2026-07-13 against the live homepage button:
+  https://fareharbor.com/embeds/book/baxstarfishing/?full-items=yes&flow=591376
+-->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@600;700&family=Cormorant+Garamond:ital,wght@1,400;1,500&display=swap" rel="stylesheet">
+<style>
+  html, body {
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    overflow-y: visible;
+    background: transparent;
+  }
+
+  #bx-boat {
+    --bx-black: #08080a;
+    --bx-near-black: #0d0d11;
+    --bx-fog: #4a5560;
+    --bx-bone: #c8c5bd;
+    --bx-pearl: #e8e6e0;
+    --bx-red: #e63946;
+    --bx-red-deep: #c1272d;
+    --bx-red-glow: rgba(230, 57, 70, 0.45);
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    padding: clamp(64px, 9vw, 120px) 24px clamp(72px, 10vw, 130px);
+    text-align: center;
+    background: var(--bx-black);
+    color: var(--bx-pearl);
+  }
+
+  /* house texture: deep vertical wash + faint red ember glow */
+  #bx-boat::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 45%, rgba(230, 57, 70, 0.045), transparent 70%),
+      linear-gradient(180deg, var(--bx-black) 0%, #0a0a0e 50%, var(--bx-black) 100%);
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  /* house texture: 64px grid, radially masked */
+  #bx-boat::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(200, 197, 189, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200, 197, 189, 0.025) 1px, transparent 1px);
+    background-size: 64px 64px;
+    z-index: 0;
+    pointer-events: none;
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 40%, transparent 100%);
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 40%, transparent 100%);
+  }
+
+  /* subtle light bands drifting — compositor-only transform */
+  #bx-boat .bx-shimmer {
+    position: absolute;
+    inset: -20% -30%;
+    pointer-events: none;
+    z-index: 0;
+    background: repeating-linear-gradient(
+      115deg,
+      rgba(200, 197, 189, 0.035) 0px,
+      rgba(200, 197, 189, 0) 26px,
+      rgba(200, 197, 189, 0.02) 52px,
+      rgba(200, 197, 189, 0) 90px
+    );
+    transform: translate3d(0, 0, 0);
+    animation: bx-drift 18s ease-in-out infinite alternate;
+  }
+
+  @keyframes bx-drift {
+    from { transform: translate3d(-2%, 0, 0); }
+    to   { transform: translate3d(2%, 1%, 0); }
+  }
+
+  #bx-boat .bx-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+
+  #bx-boat .bx-eyebrow {
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+    font-weight: 600;
+    font-size: clamp(12px, 1.2vw, 14px);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--bx-fog);
+    margin: 0 0 clamp(18px, 3vw, 30px);
+    opacity: 0;
+  }
+
+  #bx-boat .bx-words {
+    font-family: 'Bebas Neue', 'Impact', sans-serif;
+    font-weight: 400;
+    text-transform: uppercase;
+    line-height: 0.92;
+    margin: 0;
+    color: var(--bx-pearl);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: baseline;
+    gap: 0.14em 0.22em;
+    font-size: clamp(64px, 14vw, 160px);
+    letter-spacing: 0.015em;
+  }
+
+  #bx-boat .bx-word {
+    position: relative;
+    display: inline-block;
+    opacity: 0;
+    transform: scale(1.7);
+    filter: blur(8px);
+  }
+
+  #bx-boat .bx-word--boat {
+    color: var(--bx-red);
+    text-shadow: 0 0 44px var(--bx-red-glow);
+  }
+
+  /* spray burst per word — box-shadow dots, one-shot */
+  #bx-boat .bx-word::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -0.08em;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    opacity: 0;
+    background: transparent;
+    box-shadow:
+      -0.55em -0.1em 0 rgba(200, 197, 189, 0.5),
+      -0.25em -0.28em 0 rgba(200, 197, 189, 0.42),
+       0.15em -0.32em 0 rgba(200, 197, 189, 0.5),
+       0.5em  -0.14em 0 rgba(200, 197, 189, 0.38),
+       0.02em -0.05em 0 rgba(200, 197, 189, 0.45);
+  }
+
+  #bx-boat.play .bx-eyebrow { animation: bx-fade 0.6s ease-out forwards; }
+
+  #bx-boat.play .bx-word {
+    will-change: transform, opacity, filter;
+    animation: bx-slam 0.55s cubic-bezier(0.16, 1.2, 0.3, 1) forwards;
+  }
+
+  #bx-boat.play .bx-word::after { animation: bx-spray 0.7s ease-out forwards; }
+
+  #bx-boat.play .bx-word:nth-child(1) { animation-delay: 0.25s; }
+  #bx-boat.play .bx-word:nth-child(2) { animation-delay: 0.67s; }
+  #bx-boat.play .bx-word:nth-child(3) { animation-delay: 1.09s; }
+  #bx-boat.play .bx-word:nth-child(4) { animation-delay: 1.51s; }
+
+  #bx-boat.play .bx-word:nth-child(1)::after { animation-delay: 0.52s; }
+  #bx-boat.play .bx-word:nth-child(2)::after { animation-delay: 0.94s; }
+  #bx-boat.play .bx-word:nth-child(3)::after { animation-delay: 1.36s; }
+  #bx-boat.play .bx-word:nth-child(4)::after { animation-delay: 1.78s; }
+
+  #bx-boat.done .bx-word { will-change: auto; }
+
+  @keyframes bx-slam {
+    0%   { opacity: 0; transform: scale(1.7); filter: blur(8px); }
+    60%  { opacity: 1; transform: scale(0.965); filter: blur(0); }
+    100% { opacity: 1; transform: scale(1); filter: blur(0); }
+  }
+
+  @keyframes bx-spray {
+    0%   { opacity: 0; transform: translate(-50%, 0) scale(0.4); }
+    25%  { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -0.5em) scale(1.25); }
+  }
+
+  @keyframes bx-fade { from { opacity: 0; } to { opacity: 1; } }
+
+  @keyframes bx-rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* payoff in the house accent serif */
+  #bx-boat .bx-payoff {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: clamp(24px, 3.2vw, 36px);
+    line-height: 1.5;
+    color: var(--bx-bone);
+    margin: clamp(20px, 3.5vw, 34px) 0 0;
+    opacity: 0;
+  }
+
+  #bx-boat.play .bx-payoff { animation: bx-rise 0.7s ease-out 2.25s forwards; }
+
+  #bx-boat .bx-cta {
+    display: inline-block;
+    margin-top: clamp(24px, 3.5vw, 36px);
+    padding: 17px 42px;
+    min-height: 44px;
+    box-sizing: border-box;
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+    font-weight: 700;
+    font-size: clamp(16px, 1.6vw, 19px);
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: #fff;
+    background: var(--bx-red-deep);
+    border-radius: 4px;
+    box-shadow: 0 6px 28px rgba(230, 57, 70, 0.22);
+    opacity: 0;
+    transition: background 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+  }
+
+  #bx-boat.play .bx-cta { animation: bx-rise 0.7s ease-out 2.6s forwards; }
+
+  #bx-boat .bx-cta:hover {
+    background: var(--bx-red);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 34px rgba(230, 57, 70, 0.32);
+  }
+  #bx-boat .bx-cta:focus-visible { outline: 3px solid var(--bx-pearl); outline-offset: 3px; }
+
+  /* Deep-cut caption — enable only on Brady's go (also uncomment the <p> in the markup) */
+  #bx-boat .bx-deepcut {
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    line-height: 1.65;
+    color: rgba(200, 197, 189, 0.4);
+    margin: 14px 0 0;
+    opacity: 0;
+  }
+  #bx-boat.play .bx-deepcut { animation: bx-fade 0.8s ease-out 3.1s forwards; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #bx-boat .bx-shimmer { animation: none; }
+    #bx-boat .bx-eyebrow,
+    #bx-boat .bx-word,
+    #bx-boat .bx-payoff,
+    #bx-boat .bx-cta,
+    #bx-boat .bx-deepcut {
+      animation: none !important;
+      opacity: 1 !important;
+      transform: none !important;
+      filter: none !important;
+    }
+    #bx-boat .bx-word::after { display: none; }
+  }
+</style>
+</head>
+<body>
+<section id="bx-boat" aria-label="I'm on a boat. You could be. Book a Baxstar Outdoors pontoon rental.">
+  <div class="bx-shimmer" aria-hidden="true"></div>
+  <div class="bx-inner">
+    <p class="bx-eyebrow">Baxstar Outdoors &middot; Pontoon Rentals Delivered to Your Lake</p>
+    <h2 class="bx-words">
+      <span class="bx-word">I&rsquo;m</span>
+      <span class="bx-word">on</span>
+      <span class="bx-word">a</span>
+      <span class="bx-word bx-word--boat">boat.</span>
+    </h2>
+    <p class="bx-payoff">You could be.</p>
+    <a class="bx-cta" href="https://fareharbor.com/embeds/book/baxstarfishing/?full-items=yes&amp;flow=591376" target="_top" rel="noopener">See Availability &amp; Book</a>
+    <!-- Deep cut — pending Brady's call. To enable, uncomment:
+    <p class="bx-deepcut">(flippy-floppies optional)</p>
+    -->
+  </div>
+</section>
+
+<script>
+(function () {
+  'use strict';
+  var section = document.getElementById('bx-boat');
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---- animation trigger: play once at ~35% visibility ---- */
+  function settle() { section.classList.add('done'); }
+
+  if (reduced || !('IntersectionObserver' in window)) {
+    section.classList.add('play', 'done');
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) {
+          section.classList.add('play');
+          setTimeout(settle, 3600); /* release will-change after sequence */
+          io.disconnect();
+          break;
+        }
+      }
+    }, { threshold: 0.35 });
+    io.observe(section);
+  }
+
+  /* ---- Wix iframe auto-fit height reporter (single reporter, rAF-throttled) ---- */
+  var lastH = 0;
+  var raf = null;
+
+  function measure() {
+    raf = null;
+    var h = Math.ceil(document.documentElement.scrollHeight);
+    if (h !== lastH && h > 0) {
+      lastH = h;
+      try {
+        window.parent.postMessage({ type: 'bx-embed-height', id: 'bx-boat', height: h }, '*');
+      } catch (e) { /* no-op */ }
+    }
+  }
+
+  function report() {
+    if (raf === null) { raf = window.requestAnimationFrame(measure); }
+  }
+
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(report).observe(document.body);
+  } else {
+    window.addEventListener('resize', report);
+  }
+  window.addEventListener('load', report);
+  window.addEventListener('orientationchange', report);
+  if (document.fonts && document.fonts.ready) { document.fonts.ready.then(report); }
+  report();
+})();
+</script>
+</body>
+</html>
