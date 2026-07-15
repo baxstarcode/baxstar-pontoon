@@ -233,6 +233,15 @@
   .res-status.res-none { background: var(--ink-3); color: var(--muted); border: 1px solid var(--line); }
   .res-status.res-suggest { background: #211603; color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.28); }
   .res-status.res-error { background: var(--ink-3); color: var(--muted); border: 1px dashed var(--line-strong); }
+  .res-status.res-early { background: #2a1503; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.55); font-weight: 700; }
+
+  /* Early possession toggle + persistent flag */
+  .early-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: var(--text); }
+  .early-toggle input[type="checkbox"] { width: 20px; height: 20px; accent-color: #fbbf24; flex: none; margin: 0; }
+  .early-note {
+    margin-top: 8px; font-size: 13px; border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+    background: #2a1503; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.55); font-weight: 700;
+  }
   .res-status button {
     background: #1c1c20;
     border: 1px solid var(--line-strong);
@@ -750,6 +759,14 @@
       </div>
     </div>
     <div class="field" style="margin-top: 12px;">
+      <label class="early-toggle">
+        <input type="checkbox" id="early-possession">
+        <span>Early possession — customer takes the pontoon before the booking date</span>
+      </label>
+      <input type="hidden" id="possession-date">
+      <div class="early-note" id="early-note" hidden></div>
+    </div>
+    <div class="field" style="margin-top: 12px;">
       <label for="booking">FareHarbor Booking #</label>
       <input type="text" id="booking" placeholder="Booking number (blank for walk-up)" inputmode="numeric" autocomplete="off">
       <div class="booking-link-wrap" id="booking-link-wrap" hidden>
@@ -944,6 +961,9 @@
        date:        "2026-06-10"               // YYYY-MM-DD, "" possible
        pontoonUnit: "Unit 2"                   // string, "" possible
        bookingId:   "75312511"                 // FareHarbor booking #, "" = walk-up
+       earlyPossession: true                    // boat taken before the booking date
+       possessionDate:  "2026-07-14"            // day it physically changed hands
+                                                // (`date` stays the booking's legal date)
        customerEmail: "jon@example.com"        // optional — "" skips the customer email
        fareharborUrl: "https://fareharbor.com/baxstarfishing/dashboard/?bookings=75312511" // "" when no bookingId
        filename:    "Pontoon_Jon_Carlson_2026-06-10_75312511"
@@ -1022,6 +1042,7 @@
   // MOCK_RESERVATIONS stays above for the bench suite, which injects it
   // explicitly (like B4 injects a failure).
   let resCache = null;   // {at, list} — keystroke checks shouldn't re-hit Gmail
+  let lastEarlySuppressed = 0;   // backend held back N tomorrow-bookings (today unfinalized)
   function fetchTodaysReservations() {
     // Fetch-shaped: resolves with today's reservations, rejects if unavailable.
     // No backend configured (bench form_phase2.html variant) → dormant, same
@@ -1038,6 +1059,7 @@
       if (!data || data.ok !== true || !Array.isArray(data.bookings)) {
         throw new Error(data && data.error || 'Booking lookup failed');
       }
+      lastEarlySuppressed = Number(data.earlySuppressed || 0) || 0;
       // Whitelist + validate every field before it can reach the DOM or the
       // record. Booking ids must be plain digits — anything else is dropped.
       const list = data.bookings
@@ -1140,10 +1162,9 @@
     if (result.status === 'found') {
       applyReservation(result.match);
       // Item shown on purpose: Brady must SEE what matched (a wrong-item
-      // auto-fill has to be visible at a glance, not silent).
-      showResStatus('res-found', '✓ Reservation found: ' + escapeHtml(result.match.name)
-        + (result.match.item ? ' · ' + escapeHtml(result.match.item) : '')
-        + ' · ' + escapeHtml(result.match.start) + ' · #' + escapeHtml(result.match.bookingId));
+      // auto-fill has to be visible at a glance, not silent). A future-dated
+      // booking gets the amber EARLY CHECK-IN banner instead of the green.
+      showResBanner(result.match, false);
     } else if (result.status === 'suggest') {
       const btns = result.options.map((o, i) =>
         '<button type="button" data-res-idx="' + i + '">' + escapeHtml(o.name) + ' · ' + escapeHtml(o.start) + '</button>'
@@ -1153,28 +1174,93 @@
         b.addEventListener('click', () => {
           const o = result.options[Number(b.dataset.resIdx)];
           applyReservation(o);
-          showResStatus('res-found', '✓ Using reservation: ' + escapeHtml(o.name)
-            + (o.item ? ' · ' + escapeHtml(o.item) : '')
-            + ' · ' + escapeHtml(o.start) + ' · #' + escapeHtml(o.bookingId));
+          showResBanner(o, true);
         });
       });
     } else {
-      showResStatus('res-none', 'No matching reservation today — walk-up is fine.');
+      if (lastEarlySuppressed > 0) {
+        showResStatus('res-suggest', 'Heads up: tomorrow\'s booking is hidden until today\'s rental is '
+          + 'finalized. Finalize today\'s rental, then re-type the name — or enter the details manually.');
+      } else {
+        showResStatus('res-none', 'No matching reservation today — walk-up is fine.');
+      }
     }
   }
 
-  // Fills EMPTY fields only — never overwrites anything typed.
+  // Fills EMPTY fields only — never overwrites anything typed. ONE deliberate
+  // exception (early check-in): every new rental auto-seeds the date field
+  // with TODAY, so for a booking dated in the FUTURE that untouched seed is
+  // replaced with the booking's ACTUAL rental date — the legal date on the
+  // signed record. A date the operator typed themselves is never touched.
   function applyReservation(r) {
     const dateEl = document.getElementById('date');
     const timeEl = document.getElementById('out-time');
     const bookEl = document.getElementById('booking');
     const emailEl = document.getElementById('email');
-    if (dateEl && !dateEl.value && r.date) dateEl.value = r.date;
+    const isEarly = !!(r.date && r.date > todayStr());
+    if (dateEl && r.date && (!dateEl.value || (isEarly && dateEl.value === todayStr()))) {
+      dateEl.value = r.date;
+    }
     if (timeEl && !timeEl.value && r.start) timeEl.value = r.start;
     if (bookEl && !bookEl.value.trim()) { bookEl.value = r.bookingId; updateBookingLink(); }
     // Online bookings carry the customer email; staff-entered ones don't.
     if (emailEl && !emailEl.value.trim() && r.email) emailEl.value = r.email;
+    if (isEarly) {
+      // Dummy-proof: the flag sets ITSELF. Possession date = the day the
+      // reservation was pulled (today at the dock).
+      const box = document.getElementById('early-possession');
+      const pd = document.getElementById('possession-date');
+      if (box && !box.checked) {
+        box.checked = true;
+        if (pd) pd.value = todayStr();
+      }
+      updateEarlyNote();
+    }
     autoSave();
+  }
+
+  // "2026-07-15" → "July 15" for banners a stressed human reads at a glance.
+  function fmtHumanDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return String(iso || '');
+    const months = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[Number(m[2]) - 1] + ' ' + Number(m[3]);
+  }
+
+  // One place decides the match banner: green for a today booking, loud
+  // amber for a booking dated in the future (early possession).
+  function showResBanner(r, picked) {
+    const tail = escapeHtml(r.name)
+      + (r.item ? ' · ' + escapeHtml(r.item) : '')
+      + ' · ' + escapeHtml(r.start) + ' · #' + escapeHtml(r.bookingId);
+    if (r.date && r.date > todayStr()) {
+      showResStatus('res-early', '⚠ EARLY CHECK-IN — booking dated ' + escapeHtml(fmtHumanDate(r.date))
+        + ', possession taken ' + escapeHtml(fmtHumanDate(todayStr())) + '<br>' + tail);
+    } else {
+      showResStatus('res-found', (picked ? '✓ Using reservation: ' : '✓ Reservation found: ') + tail);
+    }
+  }
+
+  // The persistent amber flag under the date field. Owns possession-date:
+  // checking the box stamps today, unchecking clears it. Runs on toggle, on
+  // date edits, on state restore, and on form clear.
+  function updateEarlyNote() {
+    const box = document.getElementById('early-possession');
+    const note = document.getElementById('early-note');
+    const pd = document.getElementById('possession-date');
+    if (!box || !note || !pd) return;
+    if (box.checked && !pd.value) pd.value = todayStr();
+    if (!box.checked && pd.value) pd.value = '';
+    if (box.checked) {
+      const bookDate = document.getElementById('date').value;
+      note.textContent = '⚠ EARLY CHECK-IN — booking dated '
+        + (bookDate ? fmtHumanDate(bookDate) : '(no date set)')
+        + ', possession taken ' + fmtHumanDate(pd.value);
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
   }
 
   /* ---- BOOKING LINK ----------------------------------------------------- */
@@ -1499,7 +1585,7 @@
       sigs: {},
       marks: { out: [...marksData['diagram-out']], in: [...marksData['diagram-in']] }
     };
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date'].forEach(id => {
       const el = document.getElementById(id);
       if (el) state.inputs[id] = el.value;
     });
@@ -1513,6 +1599,8 @@
       if (oc) state.checks['out-cond-' + i] = oc.checked;
       if (ic) state.checks['in-cond-' + i] = ic.checked;
     }
+    const ep = document.getElementById('early-possession');
+    if (ep) state.checks['early-possession'] = ep.checked;
     ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
       const c = document.getElementById(id);
       state.sigs[id] = canvasIsEmpty(c) ? '' : c.toDataURL('image/png');
@@ -1558,6 +1646,7 @@
       img.src = dataUrl;
     });
     updateBookingLink();
+    updateEarlyNote();
   }
 
   // The date field is auto-filled to today on every new rental, so a lone date
@@ -1656,7 +1745,7 @@
     }));
     const payload = {
       formType: 'baxstar_pontoon_checkin',
-      formVersion: 3,
+      formVersion: 4,
       rentalId: rental.id,
       finalizedAt: new Date(rental.finalizedAt || Date.now()).toISOString(),
       client: client,
@@ -1664,6 +1753,11 @@
       pontoonUnit: (inp.pontoon || '').trim(),
       bookingId: bookingId,
       customerEmail: (inp.email || '').trim(),
+      // Early possession: customer took the boat before the booking date.
+      // `date` above stays the ACTUAL booking date (the legal date);
+      // possessionDate records the day the boat physically changed hands.
+      earlyPossession: !!checks['early-possession'],
+      possessionDate: inp['possession-date'] || '',
       fareharborUrl: bookingId ? FAREHARBOR_BASE + encodeURIComponent(bookingId) : '',
       filename: 'Pontoon_' + safeClient + '_' + (date || 'no_date') + '_' + (bookingId || 'walkup'),
       checkOut: {
@@ -1694,6 +1788,8 @@
       + '=====================================\n\n'
       + 'Client: ' + (p.client || '(no name)') + '\n'
       + 'Date: ' + (p.date || '(no date)') + '\n'
+      + (p.earlyPossession ? 'EARLY POSSESSION: pontoon taken ' + (p.possessionDate || '(date not recorded)')
+        + ' — booking dated ' + (p.date || '(no date)') + '\n' : '')
       + 'Pontoon/Unit: ' + (p.pontoonUnit || '(none)') + '\n'
       + 'FareHarbor Booking #: ' + (p.bookingId || '(walk-up)') + '\n'
       + (p.fareharborUrl ? 'Booking link: ' + p.fareharborUrl + '\n' : '')
@@ -1738,6 +1834,9 @@
     updateQueueUI();
   }
   function markFiled(rentalId) {
+    // A finalize just landed — the backend's early-check-in gate may have
+    // opened. Drop the 60s lookup cache so the next name check re-asks.
+    resCache = null;
     const rentals = getAllRentals();
     const idx = rentals.findIndex(r => r.id === rentalId);
     if (idx !== -1) {
@@ -2240,7 +2339,7 @@
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
   function clearForm() {
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
@@ -2255,6 +2354,7 @@
     });
     document.getElementById('res-status').hidden = true;
     updateBookingLink();
+    updateEarlyNote();
   }
 
   function newRental() {
@@ -2446,6 +2546,10 @@
     document.getElementById('client').addEventListener('input', scheduleReservationCheck);
     // FareHarbor link follows the booking field
     document.getElementById('booking').addEventListener('input', updateBookingLink);
+    // Early-possession flag: manual toggle for text-arranged deliveries, and
+    // the note re-renders if the date is edited after the flag is set
+    document.getElementById('early-possession').addEventListener('change', updateEarlyNote);
+    document.getElementById('date').addEventListener('input', updateEarlyNote);
 
     // Guard the auto-save window against silent loss
     window.addEventListener('beforeunload', (e) => {
