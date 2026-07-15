@@ -257,6 +257,38 @@
   .early-note {
     margin-top: 8px; font-size: 13px; border-radius: 6px; padding: 8px 10px; line-height: 1.5;
     background: #2a1503; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.55); font-weight: 700;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .early-note input[type="date"] {
+    background: #1c1207; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.55);
+    border-radius: 6px; padding: 6px 8px; font-size: 14px; font-weight: 700; min-height: 44px; flex: none;
+  }
+
+  /* Tap-to-fill booking chips under the Client Name field */
+  .booking-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .early-note[hidden], .booking-chips[hidden] { display: none !important; }
+  .booking-chips button {
+    background: #1c1c20; border: 1px solid var(--line-strong); color: var(--text);
+    border-radius: 999px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+    cursor: pointer; min-height: 44px;
+  }
+  .booking-chips button.chip-early { border-color: rgba(251, 191, 36, 0.55); color: #fbbf24; }
+  .booking-chips .chip-note { font-size: 12px; color: var(--muted); align-self: center; }
+
+  /* Per-pad signature save status */
+  .sig-status { margin-top: 6px; font-size: 12px; font-weight: 700; }
+  .sig-status.ok { color: #4ade80; }
+  .sig-status.warn { color: #f87171; }
+
+  /* Check-in pads locked until check-out is signed */
+  .sig-wrap.pad-locked .sig-canvas { opacity: 0.35; }
+  .pad-lock-hint { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+  /* New-version banner */
+  .update-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 999;
+    background: #b91c1c; color: #fff; text-align: center; font-weight: 700; font-size: 14px;
+    padding: 12px 16px; min-height: 44px; cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.5);
   }
   .res-status button {
     background: #1c1c20;
@@ -687,7 +719,7 @@
     .subhead { border-bottom-color: #e4e4e7; }
     .sig-wrap { background: #fff; border-color: #d4d4d8; }
     /* Transient advisory UI never prints */
-    .res-status, .day1-line, .sync-status { display: none !important; }
+    .res-status, .day1-line, .sync-status, .booking-chips, .sig-status, .pad-lock-hint, .update-banner { display: none !important; }
     /* The early-possession flag is part of the record — print it loud */
     .early-note { background: #fff; color: #b45309; border: 2px solid #b45309; font-weight: 700; }
     .early-toggle span { color: #18181b; }
@@ -760,6 +792,7 @@
     <div class="field">
       <label for="client">Client Name</label>
       <input type="text" id="client" placeholder="Full name" autocomplete="off">
+      <div class="booking-chips" id="booking-chips" hidden></div>
       <div class="res-status" id="res-status" hidden></div>
     </div>
     <div class="row row-single">
@@ -780,10 +813,12 @@
         <input type="checkbox" id="early-possession">
         <span>Early possession — customer takes the pontoon before the booking date</span>
       </label>
-      <input type="hidden" id="possession-date">
       <input type="hidden" id="day1-status">
       <input type="hidden" id="day1-due">
-      <div class="early-note" id="early-note" hidden></div>
+      <div class="early-note" id="early-note" hidden>
+        <span>⚠ EARLY CHECK-IN — booking dated <span id="early-booking-date">—</span>, possession taken</span>
+        <input type="date" id="possession-date" aria-label="Possession date">
+      </div>
     </div>
     <div class="field" style="margin-top: 12px;">
       <label for="booking">FareHarbor Booking #</label>
@@ -795,6 +830,10 @@
     <div class="field" style="margin-top: 12px;">
       <label for="email">Customer Email (optional — for their copy)</label>
       <input type="email" id="email" placeholder="customer@example.com" inputmode="email" autocomplete="off">
+    </div>
+    <div class="field" style="margin-top: 12px;">
+      <label for="reservation-notes">Reservation Notes (optional)</label>
+      <textarea id="reservation-notes" placeholder="Anything about this reservation — arrangements, timing, special requests..."></textarea>
     </div>
   </div>
 
@@ -869,6 +908,7 @@
         <canvas class="sig-canvas" id="sig-out-rentee"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-out-rentee')">Clear Signature</button>
       </div>
+      <div class="sig-status" id="status-sig-out-rentee" hidden></div>
       <div class="day1-line" id="day1-line" hidden>
         <span id="day1-text"></span>
         <button type="button" id="day1-cancel" onclick="cancelDay1()" hidden>Cancel send</button>
@@ -879,6 +919,7 @@
         <canvas class="sig-canvas" id="sig-out-renter"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-out-renter')">Clear Signature</button>
       </div>
+      <div class="sig-status" id="status-sig-out-renter" hidden></div>
     </div>
   </div>
 
@@ -932,17 +973,25 @@
       </p>
 
       <div class="subhead">Rentee Signature (Check In)</div>
-      <div class="sig-wrap">
+      <div class="sig-wrap" id="wrap-sig-in-rentee">
         <canvas class="sig-canvas" id="sig-in-rentee"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-in-rentee')">Clear Signature</button>
       </div>
+      <div class="pad-lock-hint" id="hint-sig-in-rentee" hidden>🔒 Locked — complete both check-out signatures first</div>
+      <div class="sig-status" id="status-sig-in-rentee" hidden></div>
 
       <div class="subhead">Renter Signature (Baxstar)</div>
-      <div class="sig-wrap">
+      <div class="sig-wrap" id="wrap-sig-in-renter">
         <canvas class="sig-canvas" id="sig-in-renter"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-in-renter')">Clear Signature</button>
       </div>
+      <div class="pad-lock-hint" id="hint-sig-in-renter" hidden>🔒 Locked — complete both check-out signatures first</div>
+      <div class="sig-status" id="status-sig-in-renter" hidden></div>
     </div>
+  </div>
+
+  <div class="update-banner" id="update-banner" hidden onclick="location.reload()">
+    ⟳ A new version of this form is available — tap here to update
   </div>
 
 </div>
@@ -1268,18 +1317,20 @@
   // The persistent amber flag under the date field. Owns possession-date:
   // checking the box stamps today, unchecking clears it. Runs on toggle, on
   // date edits, on state restore, and on form clear.
+  // The possession date is EDITABLE (retroactive flagging — a boat delivered
+  // yesterday can be recorded truthfully today). Auto-detect still stamps
+  // today as the default; the operator corrects it when reality differs.
   function updateEarlyNote() {
     const box = document.getElementById('early-possession');
     const note = document.getElementById('early-note');
     const pd = document.getElementById('possession-date');
-    if (!box || !note || !pd) return;
+    const bd = document.getElementById('early-booking-date');
+    if (!box || !note || !pd || !bd) return;
     if (box.checked && !pd.value) pd.value = todayStr();
     if (!box.checked && pd.value) pd.value = '';
     if (box.checked) {
       const bookDate = document.getElementById('date').value;
-      note.textContent = '⚠ EARLY CHECK-IN — booking dated '
-        + (bookDate ? fmtHumanDate(bookDate) : '(no date set)')
-        + ', possession taken ' + fmtHumanDate(pd.value);
+      bd.textContent = bookDate ? fmtHumanDate(bookDate) : '(no date set)';
       note.hidden = false;
     } else {
       note.hidden = true;
@@ -1503,6 +1554,9 @@
     }
     function start(e) {
       if (isLocked()) return;
+      // Check-in pads stay inert until the check-out half is signed — the
+      // wrong-pad accident and premature check-in signatures both die here.
+      if (/^sig-in-/.test(canvas.id) && !checkoutSigsComplete()) return;
       if (e.pointerId !== undefined) {
         if (activeId !== null) return;   // ignore a second finger mid-signature
         activeId = e.pointerId;
@@ -1562,7 +1616,10 @@
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     autoSave();
+    updateCheckInLock();
+    updateSigStatuses();
   }
+
 
   /* ---- SESSION PERSISTENCE ----------------------------------------------- */
   function getAllRentals() {
@@ -1608,7 +1665,7 @@
       sigs: {},
       marks: { out: [...marksData['diagram-out']], in: [...marksData['diagram-in']] }
     };
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due', 'reservation-notes'].forEach(id => {
       const el = document.getElementById(id);
       if (el) state.inputs[id] = el.value;
     });
@@ -1671,6 +1728,8 @@
     updateBookingLink();
     updateEarlyNote();
     updateDay1Line();
+    updateCheckInLock();
+    updateSigStatuses();
   }
 
   // The date field is auto-filled to today on every new rental, so a lone date
@@ -1731,6 +1790,8 @@
     renderRentalsList();
     updateCurrentLabel();
     updateDay1Line();
+    updateCheckInLock();
+    updateSigStatuses();
     return ok;
   }
 
@@ -1771,7 +1832,7 @@
     }));
     const payload = {
       formType: 'baxstar_pontoon_checkin',
-      formVersion: 4,
+      formVersion: 5,
       rentalId: rental.id,
       finalizedAt: new Date(rental.finalizedAt || Date.now()).toISOString(),
       client: client,
@@ -1784,6 +1845,7 @@
       // possessionDate records the day the boat physically changed hands.
       earlyPossession: !!checks['early-possession'],
       possessionDate: inp['possession-date'] || '',
+      reservationNotes: (inp['reservation-notes'] || '').trim(),
       fareharborUrl: bookingId ? FAREHARBOR_BASE + encodeURIComponent(bookingId) : '',
       filename: 'Pontoon_' + safeClient + '_' + (date || 'no_date') + '_' + (bookingId || 'walkup'),
       checkOut: {
@@ -1816,6 +1878,7 @@
       + 'Date: ' + (p.date || '(no date)') + '\n'
       + (p.earlyPossession ? 'EARLY POSSESSION: pontoon taken ' + (p.possessionDate || '(date not recorded)')
         + ' — booking dated ' + (p.date || '(no date)') + '\n' : '')
+      + (p.reservationNotes ? 'Reservation notes: ' + p.reservationNotes + '\n' : '')
       + 'Pontoon/Unit: ' + (p.pontoonUnit || '(none)') + '\n'
       + 'FareHarbor Booking #: ' + (p.bookingId || '(walk-up)') + '\n'
       + (p.fareharborUrl ? 'Booking link: ' + p.fareharborUrl + '\n' : '')
@@ -1835,6 +1898,115 @@
       + '\n\n=====================================\n'
       + 'Record ID: ' + p.rentalId + '\n'
       + 'Finalized: ' + p.finalizedAt;
+  }
+
+  /* ---- CHECK-IN PAD LOCK -----------------------------------------------------
+     The four identical pads get confused at a dark dock (a stray Baxstar
+     check-in signature proved it). Check-in pads accept NO strokes until both
+     check-out signatures exist. Clear stays available on every pad. */
+  function checkoutSigsComplete() {
+    const a = document.getElementById('sig-out-rentee');
+    const b = document.getElementById('sig-out-renter');
+    return !!(a && b && !canvasIsEmpty(a) && !canvasIsEmpty(b));
+  }
+
+  function updateCheckInLock() {
+    const locked = !checkoutSigsComplete();
+    ['sig-in-rentee', 'sig-in-renter'].forEach(id => {
+      const wrap = document.getElementById('wrap-' + id);
+      const hint = document.getElementById('hint-' + id);
+      // A pad that already holds a signature is never dimmed/hinted — the
+      // signature must stay visible and clearable regardless of lock state.
+      const hasSig = !canvasIsEmpty(document.getElementById(id));
+      if (wrap) wrap.classList.toggle('pad-locked', locked && !hasSig);
+      if (hint) hint.hidden = !(locked && !hasSig);
+    });
+  }
+
+  /* ---- SIGNATURE SAVE ASSURANCE -----------------------------------------------
+     Truth-based, not event-based: each pad's status line reflects whether the
+     drawn signature ACTUALLY exists in saved storage right now, and whether
+     that save has reached the cloud. A drawn-but-unpersisted signature shows
+     a loud red warning — the silent-loss failure can't be silent again. */
+  function updateSigStatuses() {
+    const r = getAllRentals().find(x => x.id === currentRentalId);
+    ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
+      const line = document.getElementById('status-' + id);
+      const canvas = document.getElementById(id);
+      if (!line || !canvas) return;
+      if (canvasIsEmpty(canvas)) { line.hidden = true; return; }
+      const persisted = !!(r && r.state && r.state.sigs && r.state.sigs[id]);
+      if (!persisted) {
+        line.className = 'sig-status warn';
+        line.textContent = '⚠ SIGNATURE NOT SAVED YET — do not close this page';
+      } else if (r.cloudSyncedAt && r.cloudUpdatedAt >= (r.updatedAt || 0)) {
+        line.className = 'sig-status ok';
+        line.textContent = '✓ Signature saved · synced to cloud';
+      } else {
+        line.className = 'sig-status ok';
+        line.textContent = '✓ Signature saved on this phone · syncing…';
+      }
+      line.hidden = false;
+    });
+  }
+
+  /* ---- TAP-TO-FILL BOOKING CHIPS ----------------------------------------------
+     The day's bookings appear as one-tap buttons the moment the Name field is
+     touched — nobody spells anything. Labels say WHICH day each booking is
+     for; a gate-hidden tomorrow booking is explained, not invisible. */
+  function renderBookingChips(list) {
+    const box = document.getElementById('booking-chips');
+    if (!box) return;
+    const clientVal = (document.getElementById('client').value || '').trim();
+    if (isLocked() || clientVal || document.getElementById('booking').value.trim()) {
+      box.hidden = true; return;
+    }
+    box.innerHTML = '';
+    (list || []).forEach(b => {
+      const early = b.date && b.date > todayStr();
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = early ? 'chip-early' : '';
+      btn.textContent = b.name + ' · ' + (early ? 'tomorrow (early)' : 'today');
+      btn.addEventListener('click', () => {
+        document.getElementById('client').value = b.name;
+        applyReservation(b);
+        showResBanner(b, true);
+        box.hidden = true;
+      });
+      box.appendChild(btn);
+    });
+    if (lastEarlySuppressed > 0) {
+      const note = document.createElement('span');
+      note.className = 'chip-note';
+      note.textContent = "+ tomorrow's booking (finalize today's rental to unlock)";
+      box.appendChild(note);
+    }
+    box.hidden = box.children.length === 0;
+  }
+
+  function refreshBookingChips() {
+    if (!webhookConfigured()) return;
+    fetchTodaysReservations()
+      .then(list => renderBookingChips(list))
+      .catch(() => { const box = document.getElementById('booking-chips'); if (box) box.hidden = true; });
+  }
+
+  /* ---- STALE-TAB UPDATE CHECK ---------------------------------------------------
+     Phone tabs run old code for DAYS. The backend advertises the latest
+     shipped form build; an older tab gets a can't-miss reload banner. Checked
+     on load and whenever the tab becomes visible (throttled). */
+  const FORM_BUILD = 6;
+  let lastUpdateCheck = 0;
+  function checkForUpdate() {
+    if (!webhookConfigured()) return;
+    if (Date.now() - lastUpdateCheck < 5 * 60 * 1000) return;
+    lastUpdateCheck = Date.now();
+    fetch(FILING_URL).then(r => r.json()).then(info => {
+      if (Number(info && info.formBuild || 0) > FORM_BUILD) {
+        document.getElementById('update-banner').hidden = false;
+      }
+    }).catch(() => {});
   }
 
   /* ---- DAY-1 COPY (auto email of the check-out record) ----------------------
@@ -1870,8 +2042,11 @@
     if (status) return;                                   // scheduled/cancelled/unsupported — done
     const email = (document.getElementById('email') || {}).value.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { updateDay1Line(); return; }
-    const sig = document.getElementById('sig-out-rentee');
-    if (!sig || canvasIsEmpty(sig)) return;               // customer hasn't signed yet
+    // BOTH check-out signatures required — the day-1 copy documents the
+    // completed handoff half, not a partially signed one.
+    const sigA = document.getElementById('sig-out-rentee');
+    const sigB = document.getElementById('sig-out-renter');
+    if (!sigA || canvasIsEmpty(sigA) || !sigB || canvasIsEmpty(sigB)) return;
     day1Requesting = true;
     sendDraftAction({ action: 'scheduleDay1Copy', rentalId: currentRentalId })
       .then((res) => {
@@ -1926,8 +2101,9 @@
     const status = (document.getElementById('day1-status') || {}).value || '';
     const due = Number((document.getElementById('day1-due') || {}).value || 0);
     const email = ((document.getElementById('email') || {}).value || '').trim();
-    const sig = document.getElementById('sig-out-rentee');
-    const signed = sig && !canvasIsEmpty(sig);
+    const sA = document.getElementById('sig-out-rentee');
+    const sB = document.getElementById('sig-out-renter');
+    const signed = sA && sB && !canvasIsEmpty(sA) && !canvasIsEmpty(sB);
     line.classList.remove('is-muted');
     btn.hidden = true;
     if (status === 'scheduled') {
@@ -2139,6 +2315,7 @@
     rentals[idx].cloudUpdatedAt = cloudUpdatedAt || rentals[idx].updatedAt;
     rentals[idx].cloudSyncedAt = Date.now();
     saveAllRentals(rentals);
+    if (rentalId === currentRentalId) updateSigStatuses();
   }
 
   async function processDraftQueue(manual) {
@@ -2414,7 +2591,7 @@
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
   function clearForm() {
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due', 'reservation-notes'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
@@ -2428,9 +2605,12 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     });
     document.getElementById('res-status').hidden = true;
+    document.getElementById('booking-chips').hidden = true;
     updateBookingLink();
     updateEarlyNote();
     updateDay1Line();
+    updateCheckInLock();
+    updateSigStatuses();
   }
 
   function newRental() {
@@ -2626,6 +2806,19 @@
     // the note re-renders if the date is edited after the flag is set
     document.getElementById('early-possession').addEventListener('change', updateEarlyNote);
     document.getElementById('date').addEventListener('input', updateEarlyNote);
+    // Tap-to-fill chips: the day's bookings appear when the Name field is
+    // touched; they hide once a name exists
+    document.getElementById('client').addEventListener('focus', refreshBookingChips);
+    document.getElementById('client').addEventListener('input', () => {
+      if ((document.getElementById('client').value || '').trim()) {
+        document.getElementById('booking-chips').hidden = true;
+      }
+    });
+    // Stale-tab update check: on load and whenever the tab comes back
+    checkForUpdate();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
 
     // Guard the auto-save window against silent loss
     window.addEventListener('beforeunload', (e) => {
