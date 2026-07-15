@@ -131,7 +131,7 @@
     letter-spacing: 1px;
     text-transform: uppercase;
     cursor: pointer;
-    min-height: 40px;
+    min-height: 44px;
   }
 
   /* Queue (not-yet-filed) bar */
@@ -159,7 +159,7 @@
     font-size: 13px;
     cursor: pointer;
     flex-shrink: 0;
-    min-height: 40px;
+    min-height: 44px;
   }
 
   /* Top fields */
@@ -219,6 +219,9 @@
   }
 
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hidden-field { display: none !important; }
+  /* A row whose only visible child is Date spans full width */
+  .row.row-single { grid-template-columns: 1fr; }
   .row > .field { min-width: 0; }
 
   /* Reservation advisory status */
@@ -234,6 +237,19 @@
   .res-status.res-suggest { background: #211603; color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.28); }
   .res-status.res-error { background: var(--ink-3); color: var(--muted); border: 1px dashed var(--line-strong); }
   .res-status.res-early { background: #2a1503; color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.55); font-weight: 700; }
+
+  /* Day-1 copy status line (under the check-out rentee signature) */
+  .day1-line {
+    margin-top: 10px; font-size: 13px; border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+    background: rgba(34, 197, 94, 0.08); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.28);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  }
+  .day1-line.is-muted { background: var(--ink-3); color: var(--muted); border: 1px solid var(--line); }
+  .day1-line button {
+    background: #1c1c20; border: 1px solid var(--line-strong); color: var(--text);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; font-weight: 600;
+    cursor: pointer; min-height: 44px; flex: none;
+  }
 
   /* Early possession toggle + persistent flag */
   .early-toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: var(--text); }
@@ -252,7 +268,7 @@
     font-weight: 600;
     cursor: pointer;
     margin: 4px 4px 0 0;
-    min-height: 40px;
+    min-height: 44px;
   }
 
   /* Booking link */
@@ -416,7 +432,7 @@
     border-radius: 6px;
     font-size: 13px;
     cursor: pointer;
-    min-height: 40px;
+    min-height: 44px;
   }
 
   /* Session manager */
@@ -468,8 +484,6 @@
   .sync-status.is-syncing .sync-dot { background: #d97706; }
   .sync-status.is-offline { color: #fb923c; }
   .sync-status.is-offline .sync-dot { background: #b45309; }
-  .handoff-actions { background: var(--ink-3); padding-top: 0; }
-  .handoff-actions .session-btn { font-size: 12px; }
   .session-actions {
     display: flex;
     gap: 8px;
@@ -551,7 +565,7 @@
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    min-height: 40px;
+    min-height: 44px;
   }
   .rental-action.danger {
     color: var(--red-bright);
@@ -608,7 +622,7 @@
     font-weight: 600;
     cursor: pointer;
     padding: 8px 0;
-    min-height: 40px;
+    min-height: 44px;
   }
 
   /* Locked (finalized) state */
@@ -672,6 +686,11 @@
     label, .subhead, .session-name, .rental-name { color: #18181b; }
     .subhead { border-bottom-color: #e4e4e7; }
     .sig-wrap { background: #fff; border-color: #d4d4d8; }
+    /* Transient advisory UI never prints */
+    .res-status, .day1-line, .sync-status { display: none !important; }
+    /* The early-possession flag is part of the record — print it loud */
+    .early-note { background: #fff; color: #b45309; border: 2px solid #b45309; font-weight: 700; }
+    .early-toggle span { color: #18181b; }
   }
 
   /* Reduced motion */
@@ -723,11 +742,6 @@
       <button class="session-btn" onclick="toggleRentalsList()">Saved (<span id="rentals-count">0</span>)</button>
       <button class="session-btn primary" onclick="newRental()">+ New Rental</button>
     </div>
-    <div class="session-actions handoff-actions">
-      <button class="session-btn" onclick="exportDraftHandoff()">⇪ Hand off draft</button>
-      <button class="session-btn" onclick="document.getElementById('import-draft-input').click()">⇩ Import draft</button>
-      <input type="file" id="import-draft-input" accept="application/json,.json" hidden onchange="importDraftHandoff(this.files && this.files[0]); this.value='';">
-    </div>
     <div class="rentals-list" id="rentals-list">
       <div id="rentals-list-items"></div>
     </div>
@@ -748,12 +762,15 @@
       <input type="text" id="client" placeholder="Full name" autocomplete="off">
       <div class="res-status" id="res-status" hidden></div>
     </div>
-    <div class="row">
+    <div class="row row-single">
       <div class="field">
         <label for="date">Date</label>
         <input type="date" id="date">
       </div>
-      <div class="field">
+      <!-- Pontoon/Unit hidden 2026-07-15: single-boat operation. Field kept in
+           DOM + records for the commercial multi-unit future — unhide by
+           removing .hidden-field to restore. -->
+      <div class="field hidden-field">
         <label for="pontoon">Pontoon / Unit</label>
         <input type="text" id="pontoon" placeholder="Unit #" autocomplete="off">
       </div>
@@ -764,6 +781,8 @@
         <span>Early possession — customer takes the pontoon before the booking date</span>
       </label>
       <input type="hidden" id="possession-date">
+      <input type="hidden" id="day1-status">
+      <input type="hidden" id="day1-due">
       <div class="early-note" id="early-note" hidden></div>
     </div>
     <div class="field" style="margin-top: 12px;">
@@ -849,6 +868,10 @@
       <div class="sig-wrap">
         <canvas class="sig-canvas" id="sig-out-rentee"></canvas>
         <button type="button" class="sig-clear" onclick="clearSig('sig-out-rentee')">Clear Signature</button>
+      </div>
+      <div class="day1-line" id="day1-line" hidden>
+        <span id="day1-text"></span>
+        <button type="button" id="day1-cancel" onclick="cancelDay1()" hidden>Cancel send</button>
       </div>
 
       <div class="subhead">Renter Signature (Baxstar)</div>
@@ -1585,7 +1608,7 @@
       sigs: {},
       marks: { out: [...marksData['diagram-out']], in: [...marksData['diagram-in']] }
     };
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due'].forEach(id => {
       const el = document.getElementById(id);
       if (el) state.inputs[id] = el.value;
     });
@@ -1647,6 +1670,7 @@
     });
     updateBookingLink();
     updateEarlyNote();
+    updateDay1Line();
   }
 
   // The date field is auto-filled to today on every new rental, so a lone date
@@ -1702,9 +1726,11 @@
       flashSavedIndicator();
       const saved = getAllRentals().find(r => r.id === currentRentalId);
       if (saved && !saved.finalized) scheduleCloudPush(currentRentalId);
+      maybeScheduleDay1();
     }
     renderRentalsList();
     updateCurrentLabel();
+    updateDay1Line();
     return ok;
   }
 
@@ -1809,6 +1835,124 @@
       + '\n\n=====================================\n'
       + 'Record ID: ' + p.rentalId + '\n'
       + 'Finalized: ' + p.finalizedAt;
+  }
+
+  /* ---- DAY-1 COPY (auto email of the check-out record) ----------------------
+     When the customer's check-out signature lands (and an email is on file),
+     the backend is asked to email them the check-out record ~1 HOUR later.
+     The timer lives SERVER-SIDE (Apps Script trigger) — the phone can lock,
+     the tab can die, the send still happens. The hour is a cancel window:
+     the line under the signature shows the send time with a Cancel button
+     (works from either phone — cancel is server-side). Guards: one send per
+     rental ever (server-enforced); finalizing first skips the day-1 send
+     (the finalize email supersedes it); no email on file = a visible muted
+     note, never a silent nothing. day1-status values: '' (idle),
+     'scheduled' (+day1-due epoch ms), 'cancelled', 'unsupported' (backend
+     not yet updated — degrades to exactly the old behavior). */
+  let day1Requesting = false;
+
+  // The check-out portion of the record: everything above the CHECK IN
+  // divider in the finalize summary, plus a Day-1 footer. Reuses buildPayload
+  // so the text matches what finalize would say for the same state.
+  function buildDay1SummaryFor(r) {
+    try {
+      const p = buildPayload({ id: r.id, createdAt: r.createdAt || 0, updatedAt: r.updatedAt || 0, state: r.state });
+      const cut = p.summaryText.split('\n\n--- CHECK IN')[0];
+      return cut + '\n\n(Day-1 copy: check-out record as of handoff. The complete '
+        + 'record including check-in follows when the rental closes.)';
+    } catch (e) { return ''; }
+  }
+
+  function maybeScheduleDay1() {
+    if (day1Requesting || !webhookConfigured() || navigator.onLine === false) return;
+    if (!currentRentalId || isLocked()) return;
+    const status = (document.getElementById('day1-status') || {}).value || '';
+    if (status) return;                                   // scheduled/cancelled/unsupported — done
+    const email = (document.getElementById('email') || {}).value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { updateDay1Line(); return; }
+    const sig = document.getElementById('sig-out-rentee');
+    if (!sig || canvasIsEmpty(sig)) return;               // customer hasn't signed yet
+    day1Requesting = true;
+    sendDraftAction({ action: 'scheduleDay1Copy', rentalId: currentRentalId })
+      .then((res) => {
+        const st = document.getElementById('day1-status');
+        const due = document.getElementById('day1-due');
+        if (st) st.value = 'scheduled';
+        if (due) due.value = String(res.dueAt || (Date.now() + 3600000));
+        autoSave();
+        updateDay1Line();
+      })
+      .catch((err) => {
+        if (/Unknown action/i.test(String(err && err.message || ''))) {
+          const st = document.getElementById('day1-status');
+          if (st) st.value = 'unsupported';
+          autoSave();
+        }
+        // Other failures (offline blip, server hiccup): stay idle — the next
+        // autosave retries naturally.
+        updateDay1Line();
+      })
+      .finally(() => { day1Requesting = false; });
+  }
+
+  function cancelDay1() {
+    const btn = document.getElementById('day1-cancel');
+    if (btn) btn.disabled = true;
+    sendDraftAction({ action: 'cancelDay1Copy', rentalId: currentRentalId })
+      .then(() => {
+        const st = document.getElementById('day1-status');
+        if (st) st.value = 'cancelled';
+        autoSave();
+        updateDay1Line();
+      })
+      .catch(() => {
+        alert('Could not reach the server to cancel — check connection and try again.');
+      })
+      .finally(() => { if (btn) btn.disabled = false; });
+  }
+
+  function fmtClock(ms) {
+    const d = new Date(Number(ms) || Date.now());
+    let h = d.getHours(); const m = String(d.getMinutes()).padStart(2, '0');
+    const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+    return h + ':' + m + ' ' + ap;
+  }
+
+  function updateDay1Line() {
+    const line = document.getElementById('day1-line');
+    const text = document.getElementById('day1-text');
+    const btn = document.getElementById('day1-cancel');
+    if (!line || !text || !btn) return;
+    const status = (document.getElementById('day1-status') || {}).value || '';
+    const due = Number((document.getElementById('day1-due') || {}).value || 0);
+    const email = ((document.getElementById('email') || {}).value || '').trim();
+    const sig = document.getElementById('sig-out-rentee');
+    const signed = sig && !canvasIsEmpty(sig);
+    line.classList.remove('is-muted');
+    btn.hidden = true;
+    if (status === 'scheduled') {
+      if (due && Date.now() > due) {
+        text.textContent = '✓ Day-1 copy emailed to the customer (~' + fmtClock(due) + ')';
+      } else {
+        text.textContent = 'Day-1 copy emails the customer ~' + (due ? fmtClock(due) : 'in 1 hour');
+        btn.hidden = false;
+      }
+      line.hidden = false;
+    } else if (status === 'cancelled') {
+      line.classList.add('is-muted');
+      text.textContent = 'Day-1 copy cancelled — the finalize email at check-in covers the record.';
+      line.hidden = false;
+    } else if (status === 'unsupported') {
+      line.classList.add('is-muted');
+      text.textContent = 'Day-1 auto-copy needs the backend update — record still files normally.';
+      line.hidden = false;
+    } else if (signed && !email) {
+      line.classList.add('is-muted');
+      text.textContent = 'Day-1 copy: no customer email on file — nothing will send.';
+      line.hidden = false;
+    } else {
+      line.hidden = true;
+    }
   }
 
   /* ---- SEND QUEUE ----------------------------------------------------------
@@ -2034,6 +2178,10 @@
               updatedAt: r.updatedAt || Date.now(),
               client: meta.client, date: meta.date, pontoon: meta.pontoon,
               hasCheckIn: meta.hasCheckIn,
+              // Day-1 copy: the backend emails THIS text when the 1-hour timer
+              // fires, so it re-syncs with every autosave — edits made during
+              // the hour ride along (as of the last sync).
+              day1Summary: buildDay1SummaryFor(r),
               state: r.state
             });
             if (res.tombstoned) {
@@ -2169,82 +2317,9 @@
     }
   }
 
-  /* ---- DEAD-ZONE PEER-TO-PEER HANDOFF (provisional) ------------------------
-     For the both-phones-offline case: export the current draft as a file
-     (Web Share → AirDrop where supported, else a download) and import one a
-     file received on the other phone. iOS can't register the form as an
-     AirDrop target, so the receiving side picks the file via "Import draft". */
-  function downloadBlob(blob, fname) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = fname;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-  }
-
-  function exportDraftHandoff() {
-    saveNow();
-    const r = getAllRentals().find(x => x.id === currentRentalId);
-    if (!r || !hasAnyContent(r.state || { inputs: {}, checks: {}, sigs: {}, marks: {} })) {
-      alert('Nothing to hand off yet — this rental is empty.');
-      return;
-    }
-    const meta = draftMetaFromRental(r);
-    const bundle = {
-      formType: 'baxstar_pontoon_draft',
-      formVersion: 3,
-      rentalId: r.id,
-      updatedAt: r.updatedAt || Date.now(),
-      client: meta.client, date: meta.date, pontoon: meta.pontoon,
-      hasCheckIn: meta.hasCheckIn,
-      state: r.state
-    };
-    const safe = (meta.client || 'rental').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'rental';
-    const fname = 'PontoonDraft_' + safe + '_' + (meta.date || 'no_date') + '.json';
-    const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
-    let file = null;
-    try { if (typeof File === 'function') file = new File([blob], fname, { type: 'application/json' }); } catch (e) {}
-    if (file && navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-      navigator.share({ files: [file], title: 'Pontoon rental draft' })
-        .catch(() => { /* user cancelled or share failed — offer the download */ downloadBlob(blob, fname); });
-    } else {
-      downloadBlob(blob, fname);
-    }
-  }
-
-  function importDraftHandoff(file) {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      let bundle;
-      try { bundle = JSON.parse(reader.result); }
-      catch (e) { alert('That file is not a valid draft (could not parse JSON).'); return; }
-      if (!bundle || bundle.formType !== 'baxstar_pontoon_draft' || !bundle.state) {
-        alert('That file is not a Baxstar pontoon draft.'); return;
-      }
-      const rentalId = bundle.rentalId || generateId();
-      const rentals = getAllRentals();
-      const idx = rentals.findIndex(r => r.id === rentalId);
-      const incoming = bundle.updatedAt || Date.now();
-      if (idx !== -1 && (rentals[idx].updatedAt || 0) > incoming) {
-        if (!confirm('You already have a NEWER copy of this rental on this device.\n\n'
-          + 'Replace it with the older imported one anyway?')) return;
-      }
-      const rec = {
-        id: rentalId,
-        createdAt: idx === -1 ? incoming : rentals[idx].createdAt,
-        updatedAt: incoming,
-        state: bundle.state
-      };
-      if (idx === -1) rentals.push(rec); else rentals[idx] = { ...rentals[idx], ...rec };
-      saveAllRentals(rentals);
-      openRental(rentalId);
-      scheduleCloudPush(rentalId);   // get the imported draft into the cloud too
-      alert('Draft imported — opened for editing.');
-    };
-    reader.readAsText(file);
-  }
+  /* Dead-zone file handoff (AirDrop export/import) removed 2026-07-15 —
+     Brady + Jackie always on signal; automatic cloud sync covers takeover.
+     History: git pre-9a6ba79 if the offline case ever returns. */
 
   /* ---- FINALIZE / LOCK ------------------------------------------------------ */
   function setLocked(locked) {
@@ -2339,7 +2414,7 @@
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
   function clearForm() {
-    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date'].forEach(id => {
+    ['client', 'date', 'pontoon', 'booking', 'email', 'out-time', 'in-time', 'out-notes', 'in-notes', 'possession-date', 'day1-status', 'day1-due'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
@@ -2355,6 +2430,7 @@
     document.getElementById('res-status').hidden = true;
     updateBookingLink();
     updateEarlyNote();
+    updateDay1Line();
   }
 
   function newRental() {
