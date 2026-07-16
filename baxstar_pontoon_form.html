@@ -1515,17 +1515,38 @@
     autoSave();
   }
 
+  /* ---- SIGNATURE DATA STORE ----------------------------------------------
+     THE FIX for the twice-lost signatures (2026-07-14 and 07-15): the canvas
+     is a VIEW, never the source of truth. iOS evicts canvas pixel memory in
+     background tabs, and the redraw on reopen is async — any save that read
+     the pixels in that window serialized a blank and DESTROYED the stored
+     signature. sigData is written by exactly two things: a real pen stroke
+     ending, or the Clear button. Nothing else can touch it, so a blank
+     canvas can no longer erase a signature. */
+  const sigData = { 'sig-out-rentee': '', 'sig-out-renter': '', 'sig-in-rentee': '', 'sig-in-renter': '' };
+
+  function redrawSigsFromData() {
+    Object.keys(sigData).forEach(id => {
+      const canvas = document.getElementById(id);
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const ratio = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!sigData[id]) return;
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width / ratio, canvas.height / ratio);
+      img.src = sigData[id];
+    });
+  }
+
   /* ---- SIGNATURE CANVASES ------------------------------------------------ */
   function setupSig(canvasId) {
     const canvas = document.getElementById(canvasId);
     const ctx = canvas.getContext('2d');
 
     function resize() {
-      // Preserve any existing signature across resize/orientation change
-      let prev = null;
-      try {
-        if (canvas.width > 0 && !canvasIsEmpty(canvas)) prev = canvas.toDataURL('image/png');
-      } catch (e) { /* ignore */ }
+      // Redraw from the sigData store — never from the (possibly evicted)
+      // pixels themselves
       const rect = canvas.getBoundingClientRect();
       const ratio = window.devicePixelRatio || 1;
       canvas.width = rect.width * ratio;
@@ -1534,10 +1555,10 @@
       ctx.lineWidth = 2;
       ctx.lineCap = 'round';
       ctx.strokeStyle = '#0a0a0a';
-      if (prev) {
+      if (sigData[canvas.id]) {
         const img = new Image();
         img.onload = () => ctx.drawImage(img, 0, 0, rect.width, rect.height);
-        img.src = prev;
+        img.src = sigData[canvas.id];
       }
     }
     resize();
@@ -1582,7 +1603,14 @@
     function end(e) {
       if (e && e.pointerId !== undefined && activeId !== null && e.pointerId !== activeId) return;
       activeId = null;
-      if (drawing) { drawing = false; autoSave(); }
+      if (drawing) {
+        drawing = false;
+        // Capture the stroke into the data store and save IMMEDIATELY —
+        // no 400ms debounce window for iOS to kill the page inside.
+        try { sigData[canvas.id] = canvas.toDataURL('image/png'); } catch (err) { /* keep prior */ }
+        doSave();
+        scheduleCloudPush();
+      }
       else { drawing = false; }
     }
     if (window.PointerEvent) {
@@ -1615,7 +1643,9 @@
     const canvas = document.getElementById(id);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    autoSave();
+    sigData[id] = '';
+    doSave();
+    scheduleCloudPush();
     updateCheckInLock();
     updateSigStatuses();
   }
@@ -1682,8 +1712,7 @@
     const ep = document.getElementById('early-possession');
     if (ep) state.checks['early-possession'] = ep.checked;
     ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
-      const c = document.getElementById(id);
-      state.sigs[id] = canvasIsEmpty(c) ? '' : c.toDataURL('image/png');
+      state.sigs[id] = sigData[id] || '';
     });
     return state;
   }
@@ -1717,13 +1746,13 @@
       const ctx = canvas.getContext('2d');
       const ratio = window.devicePixelRatio || 1;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const dataUrl = state.sigs?.[id];
-      if (!dataUrl) return;
+      sigData[id] = state.sigs?.[id] || '';
+      if (!sigData[id]) return;
       const img = new Image();
       img.onload = () => {
         ctx.drawImage(img, 0, 0, canvas.width / ratio, canvas.height / ratio);
       };
-      img.src = dataUrl;
+      img.src = sigData[id];
     });
     updateBookingLink();
     updateEarlyNote();
@@ -1832,7 +1861,7 @@
     }));
     const payload = {
       formType: 'baxstar_pontoon_checkin',
-      formVersion: 5,
+      formVersion: 6,
       rentalId: rental.id,
       finalizedAt: new Date(rental.finalizedAt || Date.now()).toISOString(),
       client: client,
@@ -1905,9 +1934,7 @@
      check-in signature proved it). Check-in pads accept NO strokes until both
      check-out signatures exist. Clear stays available on every pad. */
   function checkoutSigsComplete() {
-    const a = document.getElementById('sig-out-rentee');
-    const b = document.getElementById('sig-out-renter');
-    return !!(a && b && !canvasIsEmpty(a) && !canvasIsEmpty(b));
+    return !!(sigData['sig-out-rentee'] && sigData['sig-out-renter']);
   }
 
   function updateCheckInLock() {
@@ -1917,7 +1944,7 @@
       const hint = document.getElementById('hint-' + id);
       // A pad that already holds a signature is never dimmed/hinted — the
       // signature must stay visible and clearable regardless of lock state.
-      const hasSig = !canvasIsEmpty(document.getElementById(id));
+      const hasSig = !!sigData[id];
       if (wrap) wrap.classList.toggle('pad-locked', locked && !hasSig);
       if (hint) hint.hidden = !(locked && !hasSig);
     });
@@ -1932,9 +1959,8 @@
     const r = getAllRentals().find(x => x.id === currentRentalId);
     ['sig-out-rentee', 'sig-out-renter', 'sig-in-rentee', 'sig-in-renter'].forEach(id => {
       const line = document.getElementById('status-' + id);
-      const canvas = document.getElementById(id);
-      if (!line || !canvas) return;
-      if (canvasIsEmpty(canvas)) { line.hidden = true; return; }
+      if (!line) return;
+      if (!sigData[id]) { line.hidden = true; return; }
       const persisted = !!(r && r.state && r.state.sigs && r.state.sigs[id]);
       if (!persisted) {
         line.className = 'sig-status warn';
@@ -1996,7 +2022,7 @@
      Phone tabs run old code for DAYS. The backend advertises the latest
      shipped form build; an older tab gets a can't-miss reload banner. Checked
      on load and whenever the tab becomes visible (throttled). */
-  const FORM_BUILD = 6;
+  const FORM_BUILD = 7;
   let lastUpdateCheck = 0;
   function checkForUpdate() {
     if (!webhookConfigured()) return;
@@ -2044,9 +2070,7 @@
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { updateDay1Line(); return; }
     // BOTH check-out signatures required — the day-1 copy documents the
     // completed handoff half, not a partially signed one.
-    const sigA = document.getElementById('sig-out-rentee');
-    const sigB = document.getElementById('sig-out-renter');
-    if (!sigA || canvasIsEmpty(sigA) || !sigB || canvasIsEmpty(sigB)) return;
+    if (!sigData['sig-out-rentee'] || !sigData['sig-out-renter']) return;
     day1Requesting = true;
     sendDraftAction({ action: 'scheduleDay1Copy', rentalId: currentRentalId })
       .then((res) => {
@@ -2101,9 +2125,7 @@
     const status = (document.getElementById('day1-status') || {}).value || '';
     const due = Number((document.getElementById('day1-due') || {}).value || 0);
     const email = ((document.getElementById('email') || {}).value || '').trim();
-    const sA = document.getElementById('sig-out-rentee');
-    const sB = document.getElementById('sig-out-renter');
-    const signed = sA && sB && !canvasIsEmpty(sA) && !canvasIsEmpty(sB);
+    const signed = !!(sigData['sig-out-rentee'] && sigData['sig-out-renter']);
     line.classList.remove('is-muted');
     btn.hidden = true;
     if (status === 'scheduled') {
@@ -2817,7 +2839,12 @@
     // Stale-tab update check: on load and whenever the tab comes back
     checkForUpdate();
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') checkForUpdate();
+      if (document.visibilityState === 'visible') {
+        checkForUpdate();
+        // iOS may have evicted canvas pixels while backgrounded — repaint
+        // the view from the store
+        redrawSigsFromData();
+      }
     });
 
     // Guard the auto-save window against silent loss
