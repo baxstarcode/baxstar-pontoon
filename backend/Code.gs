@@ -3,13 +3,6 @@
  * BAXSTAR PONTOON — FILING BACKEND
  * Google Apps Script web app. Receives POSTs from baxstar_pontoon_form.html.
  *
- * ⚠ REPO-COPY WARNING (2026-07-18): this file is BEHIND the deployed backend —
- * it predates the early-checkin, day1copy, and v6 backend changes that are
- * LIVE in the Apps Script project. DO NOT paste/deploy this file as-is; the
- * v8 tombstone section below (TOMBSTONES v8 + the saveDraft gate + the reason
- * args + doGet formBuild) is the REFERENCE implementation to merge into the
- * live Code.gs. See Handoff Log for the v8 entry.
- *
  *   Phase 1 (LIVE): finalize a completed rental — file the JSON record to
  *     Drive, append one row to a Google Sheet, email the customer their copy.
  *   Phase 2 (LIVE): cloud draft sync for cross-device handoff —
@@ -19,17 +12,39 @@
  *     old finalized records.
  *   Phase 3 (LIVE): FareHarbor booking lookup — getTodaysBookings
  *     scans Gmail for FareHarbor notification emails (no FareHarbor API),
- *     reconstructs today's real PONTOON bookings (new / rebooked / cancelled,
+ *     reconstructs the real PONTOON bookings (new / rebooked / cancelled,
  *     latest email wins), and serves them to the form's reservation-advisory
  *     auto-fill. Read-only: touches no Drive files, sends no email.
- *   Tombstones (this update): when a rental is finalized or its draft deleted,
- *     the rentalId is tombstoned (Script Properties, timestamped). A stale
- *     phone re-pushing its old local copy gets an OK-but-ignored response
- *     (tombstoned: true) instead of resurrecting the draft — this kills the
- *     "zombie draft reappears from the other phone" problem and the manual
- *     refresh-the-other-phone rule. A push NEWER than the tombstone (e.g.
- *     Brady unlocks a finalized record and edits it) clears the tombstone and
- *     is accepted — deliberate resurrection stays possible.
+ *   Tombstones (v8 — this update): when a rental is finalized or its draft
+ *     deleted, the rentalId is tombstoned (Script Properties, timestamped,
+ *     now WITH a reason: 'finalized' or 'deleted'). A stale phone re-pushing
+ *     its old local copy gets an OK-but-ignored response (tombstoned: true +
+ *     reason) instead of resurrecting the draft. v8 CHANGE: a merely NEWER
+ *     push no longer clears the tombstone — "newer" proved meaningless,
+ *     since just reopening the app on a stale phone bumps updatedAt (that is
+ *     how the Debra draft resurrected 50 minutes after filing). Only an
+ *     EXPLICIT resurrect:true push clears a tombstone, and the form sends
+ *     that from exactly two deliberate human actions: Unlock, and the
+ *     Restore button on a deleted-elsewhere rental. The reason rides back on
+ *     every refusal so the form knows whether to lock the local copy (record
+ *     filed elsewhere) or park it with a Restore offer.
+ *   Early check-in (LIVE): the lookup window widens from "today only"
+ *     to TODAY + TOMORROW, so a customer whose FareHarbor booking is dated
+ *     tomorrow can be checked in the evening before and still auto-fill —
+ *     with the booking's ACTUAL rental date (the legal date), never the
+ *     handoff date. Guard rail: if today has its own booking and that rental
+ *     has NOT been finalized yet (no finalized record for today's date in
+ *     the Pontoon Rentals folder), tomorrow's bookings are SUPPRESSED from
+ *     the response — tomorrow's customer can't auto-fill while today's boat
+ *     is still out. One booking per day is the operating reality, so the
+ *     gate is simply "is there a finalized record dated today". The response
+ *     reports how many were suppressed (earlySuppressed) so the form can say
+ *     WHY a name isn't matching instead of claiming "no reservation". The
+ *     gate is computed FRESH on every request (only the Gmail scan is
+ *     cached) so a finalize opens the gate immediately, not after the cache
+ *     expires. The Sheet log gains an "Early Possession" column (appended
+ *     last so existing rows keep their meaning; the header row of an
+ *     existing sheet is extended automatically).
  *
  * DEPLOY STEPS (Brady)
  * 1. Go to https://script.google.com → open the existing "Baxstar Pontoon
@@ -63,6 +78,11 @@
  *    For Phase 3, GET the /exec URL and confirm 'getTodaysBookings' is in the
  *    actions list, then type a real booked customer's name into the form on a
  *    day with a pontoon booking and confirm the advisory offers it.
+ *    For early check-in: with a booking dated TOMORROW in FareHarbor (and no
+ *    unfinalized booking today), type that customer's name today — the form
+ *    must show the amber EARLY CHECK-IN banner and fill tomorrow's date.
+ *    For v8 tombstones: GET the /exec URL and confirm version says
+ *    sync-truth-v8 and formBuild is 8.
  *
  * SECURITY — honest limits: the form lives in a public GitHub repo, so the
  * /exec URL and TOKEN are both publicly readable. The token stops casual abuse
@@ -78,11 +98,12 @@
  *     with "data:image/". That is usable as an outbound mail relay for
  *     phishing and can burn the daily Gmail quota (blocking real customer
  *     copies). It also creates junk record files and Sheet rows.
- *   - (Phase 3) Anyone with the public token can fetch TODAY'S pontoon
- *     bookings — customer name, phone, email, booking #. Same PII class the
- *     draft listing already exposes; scope is limited to today + pontoon
- *     items only, and the action is strictly read-only (no Drive writes, no
- *     mail sends, bounded Gmail searches).
+ *   - (Phase 3) Anyone with the public token can fetch TODAY'S + TOMORROW'S
+ *     pontoon bookings — customer name, phone, email, booking #. Same PII
+ *     class the draft listing already exposes; the early-check-in update
+ *     widens the window by exactly one day. The action stays strictly
+ *     read-only (no Drive writes, no mail sends, bounded Gmail searches; the
+ *     finalize-gate check is a Drive READ of filenames only).
  * Mitigations if ever needed: rebuild the email body server-side from
  * structured fields, rate-limit finalize emails via CacheService, or require
  * a per-draft secret for fetch mode.
@@ -109,17 +130,22 @@ var CONFIG = {
   FAREHARBOR_ITEM_FILTER: /pontoon/i,
   // Result cache. Keeps repeated keystroke-triggered lookups (and several
   // devices) from re-running Gmail searches; worst case a cancellation is
-  // served this many seconds stale.
+  // served this many seconds stale. NOTE: only the Gmail SCAN is cached —
+  // the early-check-in finalize gate is re-checked on every request, so a
+  // finalize opens the gate immediately.
   LOOKUP_CACHE_SECONDS: 120,
   // Bounds so a runaway inbox can't blow the 30s Apps Script budget.
   LOOKUP_MAX_THREADS: 50,
   LOOKUP_MAX_VERIFY_IDS: 10
 };
 
+// "Early Possession" is appended LAST so rows written before this update keep
+// their column meaning. getLogSheet extends an existing sheet's header row.
 var LOG_HEADERS = [
   'Filed At', 'Client', 'Date', 'Unit', 'Booking #', 'Check-Out Time',
   'Check-In Time', 'Condition Summary', 'Check-Out Notes', 'Check-In Notes',
-  'Customer Email', 'Emailed', 'Record File'
+  'Customer Email', 'Emailed', 'Record File', 'Early Possession',
+  'Reservation Notes'
 ];
 
 /* ---- ENTRY POINTS --------------------------------------------------------- */
@@ -149,6 +175,10 @@ function doPost(e) {
         return jsonOut(handleDeleteDraft(data));
       case 'getTodaysBookings':
         return jsonOut(handleGetTodaysBookings(data));
+      case 'scheduleDay1Copy':
+        return jsonOut(handleScheduleDay1Copy(data));
+      case 'cancelDay1Copy':
+        return jsonOut(handleCancelDay1Copy(data));
       default:
         return jsonOut({ ok: false, error: 'Unknown action: ' + String(data.action) });
     }
@@ -159,14 +189,16 @@ function doPost(e) {
 
 // Sanity check in a browser: the /exec URL should show this JSON.
 // `version` bumps with behavior changes so a deploy can be verified from a
-// browser — tombstones-1 means stale-copy resurrection is blocked.
+// browser — sync-truth-v8 means tombstones carry reasons and only explicit
+// resurrect pushes can clear them (no more resurrection-by-newer-timestamp).
 function doGet() {
   return jsonOut({
     ok: true,
     service: 'baxstar-pontoon-filing',
-    version: 'phase3+tombstones-2-sync-truth-v8',
-    formBuild: 8,
-    actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings']
+    version: 'phase3+tombstones+early-checkin-1+day1copy-1+v6-1+sync-truth-v8',
+    formBuild: 8,   // latest shipped form build — older tabs show a reload banner
+    actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings',
+      'scheduleDay1Copy', 'cancelDay1Copy']
   });
 }
 
@@ -199,6 +231,9 @@ function handleFinalize(p) {
     var draftRemoved = false;
     try { draftRemoved = removeDraftFile(String(p.rentalId || '')); } catch (err2) {}
     try { addTombstone(String(p.rentalId || ''), 'finalized'); } catch (err3) {}
+    // Finalize supersedes a pending day-1 send: the customer gets the full
+    // record now, so a scheduled check-out-only copy is dropped.
+    try { day1Unqueue(String(p.rentalId || '')); } catch (err4) {}
     return {
       ok: true,
       rentalId: String(p.rentalId || ''),
@@ -267,11 +302,24 @@ function sendCustomerCopy(p) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     return { sent: false, status: 'invalid email: ' + to };
   }
+  // A customer who already received the day-1 check-out copy gets an
+  // "update" subject on the final record so the two emails read as one story.
+  var day1AlreadySent = false;
   try {
-    GmailApp.sendEmail(to, CONFIG.EMAIL_SUBJECT,
+    day1AlreadySent = day1LoadMap(DAY1_SENT_PROP)[String(p.rentalId || '')] !== undefined;
+  } catch (e) { /* property store hiccup — default to standard subject */ }
+  var subject = day1AlreadySent
+    ? 'Notice: There has been an update to your Baxstar Pontoon Check Out Form'
+    : CONFIG.EMAIL_SUBJECT;
+  var lead = day1AlreadySent
+    ? 'Thanks for renting with Baxstar Outdoors. Your rental is complete — the '
+      + 'full record below replaces the check-out copy you received earlier.\n\n'
+    : 'Thanks for renting with Baxstar Outdoors. Your rental record is below '
+      + 'for your files.\n\n';
+  try {
+    GmailApp.sendEmail(to, subject,
       'Hi ' + (String(p.client || '').trim() || 'there') + ',\n\n'
-      + 'Thanks for renting with Baxstar Outdoors. Your rental record is below '
-      + 'for your files.\n\n'
+      + lead
       + String(p.summaryText || '(summary unavailable)')
       + '\n\nQuestions? Just reply to this email.\n\nBaxstar Outdoors\n');
     return { sent: true, status: 'YES' };
@@ -362,6 +410,10 @@ function handleSaveDraft(data) {
     pontoon: String(data.pontoon || ''),
     hasCheckIn: !!data.hasCheckIn,
     finalized: !!data.finalized,
+    // Day-1 copy: the check-out summary text the scheduled send emails. The
+    // form re-sends it with every sync, so the copy that goes out reflects
+    // the draft as of the last autosave before the timer fires.
+    day1Summary: String(data.day1Summary || ''),
     state: data.state
   };
   var meta = {
@@ -472,7 +524,7 @@ function removeDraftFile(rentalId) {
 
 /* ---- PHASE 3: FAREHARBOR BOOKING LOOKUP (Gmail scan) ------------------------
    No FareHarbor API. FareHarbor emails Brady an operator notification for
-   every booking event from messages@fareharbor.com; this reconstructs today's
+   every booking event from messages@fareharbor.com; this reconstructs the
    pontoon bookings from those emails.
 
    Email anatomy (verified against Brady's real inbox 2026-07-09):
@@ -492,6 +544,18 @@ function removeDraftFile(rentalId) {
                 login codes, customer-facing copies — all ignored by
                 classification, never parsed into bookings.
 
+   EARLY CHECK-IN (window + gate):
+     - The scan covers TODAY and TOMORROW (script TZ). Each served booking
+       carries its own date, so the form fills the booking's ACTUAL rental
+       date — the legal date — never the handoff date.
+     - Gate: if today has bookings of its own and NO finalized record dated
+       today exists in the Pontoon Rentals folder, tomorrow's bookings are
+       suppressed (earlySuppressed reports the count). Today's boat must be
+       back and finalized before tomorrow's customer can auto-fill. Today
+       having no bookings at all leaves tomorrow's free to serve.
+     - Only the Gmail scan result is cached; the gate re-checks Drive on
+       every request so a finalize takes effect immediately.
+
    Safety posture (this feature replaces a mock that once auto-filled FAKE
    booking numbers into real records — never again):
      - only emails from FAREHARBOR_SENDER are parsed;
@@ -505,9 +569,10 @@ function removeDraftFile(rentalId) {
      - any search/parse failure returns ok:false — the form then says
        "couldn't verify", it never silently guesses.
 
-   Everything below except handleGetTodaysBookings/setupCheck is a PURE
-   function (no Apps Script services) so the whole parse/merge pipeline runs
-   under plain JavaScriptCore in .devtest/test_phase3_backend.js. */
+   Everything below except handleGetTodaysBookings/hasFinalizedRecordForDate/
+   setupCheck is a PURE function (no Apps Script services) so the whole
+   parse/merge pipeline runs under plain JavaScriptCore in
+   .devtest/test_phase3_backend.js. */
 
 // Strip an HTML email body to line-oriented text the field regexes can read.
 function fhStripHtml(html) {
@@ -634,10 +699,15 @@ function fhParseEmail(subject, htmlBody, atMs) {
   return { kind: 'new', atMs: atMs, booking: booking };
 }
 
-// Merge events (any order) into the surviving bookings for `todayIso`
-// ("yyyy-mm-dd"). Latest email wins per id; cancelled/superseded ids drop;
-// only pontoon items on today's date survive. PURE.
-function fhMergeEvents(events, todayIso) {
+// Merge events (any order) into the surviving bookings for the allowed dates
+// (a "yyyy-mm-dd" string or an array of them — the early-check-in window
+// passes [today, tomorrow]). Latest email wins per id; cancelled/superseded
+// ids drop; only pontoon items on an allowed date survive. PURE.
+function fhMergeEvents(events, allowedDates) {
+  var allowed = {};
+  var dateList = typeof allowedDates === 'string' ? [allowedDates] : (allowedDates || []);
+  for (var a = 0; a < dateList.length; a++) allowed[dateList[a]] = true;
+
   var sorted = (events || []).slice().sort(function (a, b) { return (a.atMs || 0) - (b.atMs || 0); });
   var state = {};
   var touch = function (id) {
@@ -667,12 +737,16 @@ function fhMergeEvents(events, todayIso) {
   for (var id in state) {
     var s = state[id];
     if (!s.booking || s.cancelled || s.superseded) continue;
-    if (s.booking.date !== todayIso) continue;
+    if (!allowed[s.booking.date]) continue;
     if (!CONFIG.FAREHARBOR_ITEM_FILTER.test(s.booking.item)) continue;
     if (!/^\d{5,12}$/.test(s.booking.bookingId)) continue;
     out.push(s.booking);
   }
-  out.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+  out.sort(function (a, b) {
+    // Date first (today before tomorrow), then start time.
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+  });
   return out;
 }
 
@@ -705,66 +779,292 @@ function fhEventsFromThreads(threads) {
   return events;
 }
 
-// { action:'getTodaysBookings' } → { ok:true, date:'yyyy-mm-dd', bookings:[
+// EARLY CHECK-IN GATE: is there a finalized record dated `dateIso` in the
+// Pontoon Rentals folder? Finalized filenames are built server-side as
+// Pontoon_{client}_{date}_{bookingID}[.._rN].json, so a filename containing
+// "_<date>_" is a finalized rental for that date. Filename READ only — no
+// content parsing, no writes. The retention sweep keeps this folder small
+// (≤ ~6 months of records), so a full iterate is cheap.
+function hasFinalizedRecordForDate(dateIso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateIso || ''))) return false;
+  var folder = getRentalsFolder();
+  var re = new RegExp('_' + dateIso + '_');
+  var it = folder.getFiles();
+  while (it.hasNext()) {
+    var f = it.next();
+    if (f.isTrashed()) continue;
+    if (!/\.json$/.test(f.getName())) continue;
+    if (re.test(f.getName())) return true;
+  }
+  return false;
+}
+
+// { action:'getTodaysBookings' } → { ok:true, date:'yyyy-mm-dd',
+//   tomorrowDate:'yyyy-mm-dd', earlySuppressed:N, bookings:[
 //   { bookingId, name, phone, email, item, date, start, end, multiDay,
 //     createdBy } ] }
 // start/end are 24h "HH:MM" (ready for the form's <input type="time">).
-// STRICTLY READ-ONLY: no Drive writes, no mail. Errors → { ok:false }.
+// Window: today + tomorrow. Tomorrow's bookings are suppressed while today
+// has a booking of its own with no finalized record yet (earlySuppressed
+// reports how many were held back). STRICTLY READ-ONLY: no Drive writes, no
+// mail — the gate is a filename read. Errors → { ok:false }.
 function handleGetTodaysBookings(data) {
   var tz = Session.getScriptTimeZone();
   var now = new Date();
   var todayIso = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
-  var datePhrase = Utilities.formatDate(now, tz, 'MMMM d, yyyy');
+  var todayPhrase = Utilities.formatDate(now, tz, 'MMMM d, yyyy');
+  var tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  var tomorrowIso = Utilities.formatDate(tomorrow, tz, 'yyyy-MM-dd');
+  var tomorrowPhrase = Utilities.formatDate(tomorrow, tz, 'MMMM d, yyyy');
 
-  var cache = null, cacheKey = 'fh_bookings_' + todayIso;
+  // Only the Gmail SCAN is cached. The finalize gate below runs fresh on
+  // every request — otherwise a finalize wouldn't unlock tomorrow's customer
+  // until the cache expired, which is exactly wrong at the dock.
+  var cache = null, cacheKey = 'fh_bookings_v2_' + todayIso;
   try { cache = CacheService.getScriptCache(); } catch (errCache) { cache = null; }
+  var scan = null;
   if (cache) {
     var hit = cache.get(cacheKey);
-    if (hit) { try { return JSON.parse(hit); } catch (errHit) {} }
+    if (hit) { try { scan = JSON.parse(hit); } catch (errHit) { scan = null; } }
   }
 
-  var result;
-  try {
-    // Pass 1: everything FareHarbor sent that mentions today's date phrase.
-    // New bookings and cancellations carry it in the subject; a rebook AWAY
-    // from today carries it in the body's Old/New table — Gmail full-text
-    // search matches bodies, so all three surface here.
-    var query = 'from:' + CONFIG.FAREHARBOR_SENDER + ' "' + datePhrase + '"';
-    var threads = GmailApp.search(query, 0, CONFIG.LOOKUP_MAX_THREADS);
-    var events = fhEventsFromThreads(threads);
-    var bookings = fhMergeEvents(events, todayIso);
+  if (!scan || !isArray(scan.all)) {
+    try {
+      // Pass 1: everything FareHarbor sent that mentions today's OR
+      // tomorrow's date phrase ({} is Gmail's OR). New bookings and
+      // cancellations carry it in the subject; a rebook AWAY carries it in
+      // the body's Old/New table — Gmail full-text search matches bodies,
+      // so all three surface here.
+      var query = 'from:' + CONFIG.FAREHARBOR_SENDER
+        + ' {"' + todayPhrase + '" "' + tomorrowPhrase + '"}';
+      var threads = GmailApp.search(query, 0, CONFIG.LOOKUP_MAX_THREADS);
+      var events = fhEventsFromThreads(threads);
+      var bookings = fhMergeEvents(events, [todayIso, tomorrowIso]);
 
-    // Pass 2: per-id verification — a targeted search per surviving id
-    // catches any cancel/rebook the date search missed (odd formatting,
-    // clipped body, future template drift). Merge re-runs with the extra
-    // events so ordering stays time-based.
-    var verified = bookings;
-    if (bookings.length) {
-      var extra = [];
-      var limit = Math.min(bookings.length, CONFIG.LOOKUP_MAX_VERIFY_IDS);
-      for (var i = 0; i < limit; i++) {
-        var idThreads = GmailApp.search(
-          'from:' + CONFIG.FAREHARBOR_SENDER + ' "' + bookings[i].bookingId + '"', 0, 10);
-        extra = extra.concat(fhEventsFromThreads(idThreads));
+      // Pass 2: per-id verification — a targeted search per surviving id
+      // catches any cancel/rebook the date search missed (odd formatting,
+      // clipped body, future template drift). Merge re-runs with the extra
+      // events so ordering stays time-based.
+      var verified = bookings;
+      if (bookings.length) {
+        var extra = [];
+        var limit = Math.min(bookings.length, CONFIG.LOOKUP_MAX_VERIFY_IDS);
+        for (var i = 0; i < limit; i++) {
+          var idThreads = GmailApp.search(
+            'from:' + CONFIG.FAREHARBOR_SENDER + ' "' + bookings[i].bookingId + '"', 0, 10);
+          extra = extra.concat(fhEventsFromThreads(idThreads));
+        }
+        verified = fhMergeEvents(events.concat(extra), [todayIso, tomorrowIso]);
+        if (bookings.length > CONFIG.LOOKUP_MAX_VERIFY_IDS) {
+          // Never serve more than we could verify.
+          verified = verified.slice(0, CONFIG.LOOKUP_MAX_VERIFY_IDS);
+        }
       }
-      verified = fhMergeEvents(events.concat(extra), todayIso);
-      if (bookings.length > CONFIG.LOOKUP_MAX_VERIFY_IDS) {
-        // Never serve more than we could verify.
-        verified = verified.slice(0, CONFIG.LOOKUP_MAX_VERIFY_IDS);
+
+      scan = { all: verified };
+      if (cache) {
+        try { cache.put(cacheKey, JSON.stringify(scan), CONFIG.LOOKUP_CACHE_SECONDS); }
+        catch (errPut) {}
+      }
+    } catch (err) {
+      // Honest failure: the form shows "couldn't verify — enter manually".
+      return { ok: false, error: 'Booking lookup failed: ' + String(err && err.message || err) };
+    }
+  }
+
+  // Split the window and apply the early-check-in gate (fresh every call).
+  var todays = [], tomorrows = [];
+  for (var j = 0; j < scan.all.length; j++) {
+    var b = scan.all[j];
+    if (b && b.date === todayIso) todays.push(b);
+    else if (b && b.date === tomorrowIso) tomorrows.push(b);
+  }
+  var earlySuppressed = 0;
+  if (tomorrows.length && todays.length) {
+    var gateOpen = false;
+    // A Drive hiccup fails CLOSED: better to make Brady enter tomorrow's
+    // booking manually than to auto-fill it past an unfinalized rental.
+    try { gateOpen = hasFinalizedRecordForDate(todayIso); } catch (errGate) { gateOpen = false; }
+    if (!gateOpen) {
+      earlySuppressed = tomorrows.length;
+      tomorrows = [];
+    }
+  }
+
+  return {
+    ok: true,
+    date: todayIso,
+    tomorrowDate: tomorrowIso,
+    earlySuppressed: earlySuppressed,
+    bookings: todays.concat(tomorrows)
+  };
+}
+
+// Array.isArray shim-style helper (Apps Script V8 has Array.isArray; this
+// just keeps the call sites short and null-safe).
+function isArray(v) {
+  return Object.prototype.toString.call(v) === '[object Array]';
+}
+
+/* ---- DAY-1 COPY (scheduled check-out email) ---------------------------------
+   The form asks for a day-1 copy the moment the customer's check-out
+   signature lands; the send happens ~1 HOUR later so Brady has a generous
+   cancel window. The timer is a one-shot Apps Script trigger (server-side —
+   phones can lock and die, the send still fires, running as Brady so
+   GmailApp works). State in Script Properties:
+     DAY1_QUEUE {rentalId: dueAtMs} — pending sends
+     DAY1_SENT  {rentalId: sentAtMs} — permanent once-per-rental guard
+   At fire time the handler reads the CLOUD DRAFT as it exists then — the
+   emailed text (draft.day1Summary) and recipient (draft.state.inputs.email)
+   are whatever the last autosave synced, so in-hour fixes ride along. If the
+   draft is gone (finalized/deleted) the send is skipped: the finalize email
+   already covers it. Scheduling is IDEMPOTENT per rentalId — two phones both
+   asking is harmless. One trigger serves the whole queue: it is recreated
+   for the earliest remaining due time after every change/fire. */
+
+var DAY1_QUEUE_PROP = 'DAY1_QUEUE';
+var DAY1_SENT_PROP = 'DAY1_SENT';
+var DAY1_DELAY_MS = 60 * 60 * 1000;   // 1 hour
+var DAY1_HANDLER = 'sendDueDay1Copies';
+var DAY1_EMAIL_SUBJECT = 'Your Baxstar Outdoors pontoon check-out record';
+
+function day1LoadMap(prop) {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty(prop) || '{}') || {};
+  } catch (err) { return {}; }
+}
+
+function day1SaveMap(prop, map) {
+  PropertiesService.getScriptProperties().setProperty(prop, JSON.stringify(map));
+}
+
+// Point the single day-1 trigger at the earliest pending send. Deletes any
+// existing day-1 triggers first so they never stack.
+function day1ResetTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === DAY1_HANDLER) ScriptApp.deleteTrigger(triggers[i]);
+  }
+  var queue = day1LoadMap(DAY1_QUEUE_PROP);
+  var earliest = 0;
+  for (var id in queue) {
+    var due = Number(queue[id]) || 0;
+    if (due && (!earliest || due < earliest)) earliest = due;
+  }
+  if (earliest) {
+    var waitMs = Math.max(earliest - Date.now(), 15 * 1000);
+    ScriptApp.newTrigger(DAY1_HANDLER).timeBased().after(waitMs).create();
+  }
+}
+
+// Remove one rental from the pending queue (finalize/cancel path). Caller
+// holds the script lock. Returns whether it was queued.
+function day1Unqueue(rentalId) {
+  if (!rentalId) return false;
+  var queue = day1LoadMap(DAY1_QUEUE_PROP);
+  if (queue[rentalId] === undefined) return false;
+  delete queue[rentalId];
+  day1SaveMap(DAY1_QUEUE_PROP, queue);
+  day1ResetTrigger();
+  return true;
+}
+
+// { action:'scheduleDay1Copy', rentalId } → { ok:true, dueAt } (idempotent:
+// re-asking returns the existing dueAt; already-sent returns sent:true).
+function handleScheduleDay1Copy(data) {
+  var rentalId = String(data.rentalId || '').trim();
+  if (!rentalId) return { ok: false, error: 'scheduleDay1Copy: missing rentalId' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var sent = day1LoadMap(DAY1_SENT_PROP);
+    if (sent[rentalId] !== undefined) {
+      return { ok: true, rentalId: rentalId, sent: true, sentAt: Number(sent[rentalId]) };
+    }
+    var queue = day1LoadMap(DAY1_QUEUE_PROP);
+    if (queue[rentalId] !== undefined) {
+      return { ok: true, rentalId: rentalId, dueAt: Number(queue[rentalId]) };
+    }
+    var dueAt = Date.now() + DAY1_DELAY_MS;
+    queue[rentalId] = dueAt;
+    day1SaveMap(DAY1_QUEUE_PROP, queue);
+    day1ResetTrigger();
+    return { ok: true, rentalId: rentalId, dueAt: dueAt };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// { action:'cancelDay1Copy', rentalId } → { ok:true, cancelled } (cancelled
+// is false when nothing was pending — already sent or never scheduled).
+function handleCancelDay1Copy(data) {
+  var rentalId = String(data.rentalId || '').trim();
+  if (!rentalId) return { ok: false, error: 'cancelDay1Copy: missing rentalId' };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var cancelled = day1Unqueue(rentalId);
+    return { ok: true, rentalId: rentalId, cancelled: cancelled };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Trigger handler: send every due day-1 copy, then re-arm for the earliest
+// remaining one. Skips (and clears) rentals whose draft is gone — finalize
+// or delete happened inside the hour and the finalize email supersedes.
+function sendDueDay1Copies() {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var queue = day1LoadMap(DAY1_QUEUE_PROP);
+    var sent = day1LoadMap(DAY1_SENT_PROP);
+    var now = Date.now();
+    var changed = false;
+    var folder = null;
+    for (var rentalId in queue) {
+      if (Number(queue[rentalId]) > now) continue;   // not due yet
+      delete queue[rentalId];
+      changed = true;
+      if (sent[rentalId] !== undefined) continue;    // once per rental, ever
+      if (!folder) folder = getDraftsFolder();
+      var file = findDraftFile(folder, rentalId);
+      if (!file) { Logger.log('day1: draft gone for ' + rentalId + ' — skipped (finalized/deleted)'); continue; }
+      var draft = null;
+      try { draft = JSON.parse(file.getBlob().getDataAsString()); } catch (errRead) { draft = null; }
+      if (!draft) { Logger.log('day1: draft unreadable for ' + rentalId + ' — skipped'); continue; }
+      var to = String(draft.state && draft.state.inputs && draft.state.inputs.email || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        Logger.log('day1: no valid email for ' + rentalId + ' — skipped');
+        continue;
+      }
+      var summary = String(draft.day1Summary || '');
+      if (!summary) { Logger.log('day1: no summary synced for ' + rentalId + ' — skipped'); continue; }
+      try {
+        GmailApp.sendEmail(to, DAY1_EMAIL_SUBJECT,
+          'Hi ' + (String(draft.client || '').trim() || 'there') + ',\n\n'
+          + 'Thanks for renting with Baxstar Outdoors. Below is the check-out '
+          + 'record from your pontoon handoff, for your files. The complete '
+          + 'record including check-in will follow when the rental closes.\n\n'
+          + summary
+          + '\n\nQuestions? Just reply to this email.\n\nBaxstar Outdoors\n');
+        sent[rentalId] = Date.now();
+        Logger.log('day1: sent for ' + rentalId + ' to ' + to);
+      } catch (errSend) {
+        // Send failed (quota, transient): put it back 10 minutes out rather
+        // than losing it, and let the re-armed trigger retry.
+        queue[rentalId] = Date.now() + 10 * 60 * 1000;
+        Logger.log('day1: send FAILED for ' + rentalId + ': ' + String(errSend && errSend.message || errSend));
       }
     }
-
-    result = { ok: true, date: todayIso, bookings: verified };
-  } catch (err) {
-    // Honest failure: the form shows "couldn't verify — enter manually".
-    return { ok: false, error: 'Booking lookup failed: ' + String(err && err.message || err) };
+    if (changed) {
+      day1SaveMap(DAY1_QUEUE_PROP, queue);
+      day1SaveMap(DAY1_SENT_PROP, sent);
+    }
+    day1ResetTrigger();
+  } finally {
+    lock.releaseLock();
   }
-
-  if (cache) {
-    try { cache.put(cacheKey, JSON.stringify(result), CONFIG.LOOKUP_CACHE_SECONDS); }
-    catch (errPut) {}
-  }
-  return result;
 }
 
 /* ---- TOMBSTONES (v8) --------------------------------------------------------
@@ -855,12 +1155,21 @@ function getLogSheet(folder) {
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(LOG_HEADERS);
     sheet.setFrozenRows(1);
+  } else if (sheet.getLastColumn() < LOG_HEADERS.length) {
+    // A pre-early-check-in sheet lacks the trailing "Early Possession"
+    // header — extend the header row in place so new rows line up. New
+    // columns are appended at the END only; existing columns never move.
+    var startCol = sheet.getLastColumn() + 1;
+    sheet.getRange(1, startCol, 1, LOG_HEADERS.length - startCol + 1)
+      .setValues([LOG_HEADERS.slice(startCol - 1)]);
   }
   return sheet;
 }
 
 // One at-a-glance row per filed rental. The Sheet is an index only —
 // signatures and diagram marks live in the JSON file, never in cells.
+// "Early Possession" holds the date the customer physically took the boat
+// when it differs from the booking date; blank for normal rentals.
 function appendLogRow(folder, p, file, email) {
   var sheet = getLogSheet(folder);
   sheet.appendRow([
@@ -876,7 +1185,9 @@ function appendLogRow(folder, p, file, email) {
     String(p.checkIn && p.checkIn.notes || ''),
     String(p.customerEmail || ''),
     email.status,
-    file.getUrl()
+    file.getUrl(),
+    p.earlyPossession ? ('taken ' + String(p.possessionDate || '(date not recorded)')) : '',
+    String(p.reservationNotes || '')
   ]);
 }
 
@@ -971,7 +1282,9 @@ function setupCheck() {
   Logger.log('Drafts folder ready: ' + drafts.getName() + ' (' + drafts.getUrl() + ')');
   Logger.log('Log sheet ready: ' + sheet.getParent().getUrl());
   Logger.log('Gmail quota remaining today: ' + MailApp.getRemainingDailyQuota());
-  // Phase 3: exercise the Gmail READ scope + show what today's scan finds.
+  // Phase 3 + early check-in: exercise the Gmail READ scope + show what the
+  // today+tomorrow scan finds (and whether the finalize gate suppressed
+  // anything).
   var lookup = handleGetTodaysBookings({});
-  Logger.log('FareHarbor lookup (today): ' + JSON.stringify(lookup));
+  Logger.log('FareHarbor lookup (today+tomorrow): ' + JSON.stringify(lookup));
 }
