@@ -82,11 +82,34 @@ var tsEq = tombstoneTime('r_100_aaa');
 var r2b = save('r_100_aaa', tsEq, 'Zombie Case');
 t('push at exactly tombstone time: still refused', r2b.tombstoned === true, r2b);
 
-/* ---- 3. deliberate resurrection: newer edit clears the tombstone ---- */
-var r3 = save('r_100_aaa', Date.now() + 1000, 'Lazarus Edit');
-t('newer push: accepted (no tombstoned flag)', r3.ok === true && !r3.tombstoned, r3);
-t('newer push: tombstone cleared', tombstoneTime('r_100_aaa') === 0);
-t('newer push: draft listed again', listed('r_100_aaa'));
+/* ---- 3. v8: a NEWER incidental edit does NOT resurrect — only an explicit
+        resurrect:true push does. (v7 cleared on any newer updatedAt, which
+        let a stale phone's app-open touch resurrect a filed rental.) ---- */
+var r3a = save('r_100_aaa', Date.now() + 1000, 'Incidental Touch');
+t('v8 newer push WITHOUT resurrect: still refused', r3a.ok === true && r3a.tombstoned === true, r3a);
+t('v8 newer push: reason rides back', r3a.reason === 'deleted', r3a);
+t('v8 newer push: tombstone intact', tombstoneTime('r_100_aaa') > 0);
+t('v8 newer push: draft NOT resurrected', !listed('r_100_aaa'));
+
+var r3b = handleSaveDraft({ rentalId: 'r_100_aaa', updatedAt: Date.now() + 2000, resurrect: true,
+  client: 'Lazarus Edit', date: '2026-07-09', pontoon: 'U1', hasCheckIn: false, state: STATE });
+t('v8 resurrect push: accepted', r3b.ok === true && !r3b.tombstoned, r3b);
+t('v8 resurrect push: tombstone cleared', tombstoneTime('r_100_aaa') === 0);
+t('v8 resurrect push: draft listed again', listed('r_100_aaa'));
+
+/* ---- 3c. finalize-reason tombstone: refusal says 'finalized' ---- */
+addTombstone('r_150_fff', 'finalized');
+var r3c = save('r_150_fff', Date.now() + 5000, 'Stale After Filing');
+t('v8 push against finalized rental: refused with reason finalized',
+  r3c.tombstoned === true && r3c.reason === 'finalized', r3c);
+clearTombstone('r_150_fff');
+
+/* ---- 3d. legacy v7 numeric tombstone still readable, refusal has empty reason ---- */
+saveTombstones({ 'r_160_leg': Date.now() - 1000 });
+var r3d = save('r_160_leg', Date.now() + 1000, 'Legacy Stone');
+t('v8 reads legacy numeric tombstone: still refused', r3d.tombstoned === true, r3d);
+t('v8 legacy tombstone: reason empty (form falls back to v7 behavior)', r3d.reason === '', r3d);
+clearTombstone('r_160_leg');
 
 /* ---- 4. getActive belt-and-suspenders: live file + tombstone → hidden ---- */
 save('r_200_bbb', Date.now(), 'Belt Suspenders');
