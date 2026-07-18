@@ -3,6 +3,13 @@
  * BAXSTAR PONTOON — FILING BACKEND
  * Google Apps Script web app. Receives POSTs from baxstar_pontoon_form.html.
  *
+ * ⚠ REPO-COPY WARNING (2026-07-18): this file is BEHIND the deployed backend —
+ * it predates the early-checkin, day1copy, and v6 backend changes that are
+ * LIVE in the Apps Script project. DO NOT paste/deploy this file as-is; the
+ * v8 tombstone section below (TOMBSTONES v8 + the saveDraft gate + the reason
+ * args + doGet formBuild) is the REFERENCE implementation to merge into the
+ * live Code.gs. See Handoff Log for the v8 entry.
+ *
  *   Phase 1 (LIVE): finalize a completed rental — file the JSON record to
  *     Drive, append one row to a Google Sheet, email the customer their copy.
  *   Phase 2 (LIVE): cloud draft sync for cross-device handoff —
@@ -157,7 +164,8 @@ function doGet() {
   return jsonOut({
     ok: true,
     service: 'baxstar-pontoon-filing',
-    version: 'phase3+tombstones-1',
+    version: 'phase3+tombstones-2-sync-truth-v8',
+    formBuild: 8,
     actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings']
   });
 }
@@ -190,7 +198,7 @@ function handleFinalize(p) {
     // a draft-cleanup hiccup must never fail an otherwise-good filing.
     var draftRemoved = false;
     try { draftRemoved = removeDraftFile(String(p.rentalId || '')); } catch (err2) {}
-    try { addTombstone(String(p.rentalId || '')); } catch (err3) {}
+    try { addTombstone(String(p.rentalId || ''), 'finalized'); } catch (err3) {}
     return {
       ok: true,
       rentalId: String(p.rentalId || ''),
@@ -364,17 +372,23 @@ function handleSaveDraft(data) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    // Tombstone gate: if this rental was finalized/deleted AFTER this copy
-    // was last edited, the push is a stale phone resurrecting a zombie —
-    // acknowledge it (ok:true so the sender's retry queue drains) but write
-    // nothing, and tell the sender so it can drop its stale local copy.
-    // A NEWER write than the tombstone is deliberate (e.g. unlock-and-edit
-    // of a finalized record): clear the tombstone and accept it.
-    var ts = tombstoneTime(rentalId);
-    if (ts && updatedAt <= ts) {
-      return { ok: true, rentalId: rentalId, updatedAt: updatedAt, tombstoned: true };
+    // Tombstone gate (v8): this rental was finalized or its draft deleted —
+    // acknowledge the push (ok:true so the sender's retry queue drains) but
+    // write NOTHING, and say why, so the sender can lock or park its copy.
+    // Only an EXPLICIT resurrect:true push (the form sends it from Unlock and
+    // from the Restore button — deliberate human actions) clears the stamp.
+    // v7 cleared on any newer updatedAt, but "newer" proved meaningless:
+    // merely reopening the app on a stale phone bumps updatedAt, which
+    // resurrected the Debra draft 50 minutes after her rental was filed.
+    var stone = tombstoneEntry(rentalId);
+    if (stone) {
+      if (data.resurrect === true) {
+        clearTombstone(rentalId);
+      } else {
+        return { ok: true, rentalId: rentalId, updatedAt: updatedAt,
+                 tombstoned: true, reason: stone.reason };
+      }
     }
-    if (ts) clearTombstone(rentalId);
 
     var folder = getDraftsFolder();
     var file = findDraftFile(folder, rentalId);
@@ -438,7 +452,7 @@ function handleDeleteDraft(data) {
   lock.waitLock(30000);
   try {
     var removed = removeDraftFile(rentalId);
-    addTombstone(rentalId);
+    addTombstone(rentalId, 'deleted');
     return { ok: true, rentalId: rentalId, removed: removed };
   } finally {
     lock.releaseLock();
@@ -753,13 +767,16 @@ function handleGetTodaysBookings(data) {
   return result;
 }
 
-/* ---- TOMBSTONES -------------------------------------------------------------
-   { rentalId: epochMs } map in Script Properties, stamped when a rental is
-   finalized or its draft deleted. saveDraft compares the incoming copy's
-   updatedAt against the stamp: older-or-equal = a stale phone re-pushing a
-   zombie (acknowledged, ignored); newer = a deliberate resurrection (tombstone
-   cleared, accepted). Entries self-prune after 90 days — no phone plausibly
-   re-syncs a draft older than that, and drafts themselves never live that long.
+/* ---- TOMBSTONES (v8) --------------------------------------------------------
+   { rentalId: { t: epochMs, reason: 'finalized'|'deleted' } } map in Script
+   Properties, stamped when a rental is finalized ('finalized') or its draft
+   deleted ('deleted'). saveDraft refuses EVERY push against a tombstoned id —
+   regardless of timestamps — unless the push carries resurrect:true, which
+   the form sends only from deliberate human actions (Unlock, Restore).
+   The reason rides back on the refusal so the form knows whether to lock the
+   local copy (record filed elsewhere) or park it with a Restore offer.
+   Legacy entries from the v7 numeric format ({ rentalId: epochMs }) are still
+   readable; they carry no reason. Entries self-prune after 90 days.
    Callers that WRITE (add/clear) must hold the script lock; reads are safe. */
 
 var TOMBSTONE_PROP = 'TOMBSTONES';
@@ -777,12 +794,26 @@ function saveTombstones(map) {
   PropertiesService.getScriptProperties().setProperty(TOMBSTONE_PROP, JSON.stringify(map));
 }
 
-function addTombstone(rentalId) {
+// Normalize one raw map value to { t, reason } — accepts the v8 object shape
+// and the legacy v7 bare-number shape. Returns null for absent/garbage.
+function normalizeTombstone(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'number') return { t: v, reason: '' };            // legacy v7
+  if (typeof v === 'object' && isFinite(Number(v.t))) {
+    return { t: Number(v.t), reason: String(v.reason || '') };
+  }
+  return null;
+}
+
+function addTombstone(rentalId, reason) {
   if (!rentalId) return;
   var map = loadTombstones();
   var cutoff = Date.now() - TOMBSTONE_TTL_MS;
-  for (var id in map) { if (Number(map[id]) < cutoff) delete map[id]; }
-  map[rentalId] = Date.now();
+  for (var id in map) {
+    var e = normalizeTombstone(map[id]);
+    if (!e || e.t < cutoff) delete map[id];
+  }
+  map[rentalId] = { t: Date.now(), reason: String(reason || '') };
   saveTombstones(map);
 }
 
@@ -794,9 +825,13 @@ function clearTombstone(rentalId) {
   }
 }
 
+function tombstoneEntry(rentalId) {
+  return normalizeTombstone(loadTombstones()[rentalId]);
+}
+
 function tombstoneTime(rentalId) {
-  var v = loadTombstones()[rentalId];
-  return v === undefined ? 0 : Number(v);
+  var e = tombstoneEntry(rentalId);
+  return e ? e.t : 0;
 }
 
 /* ---- DRIVE / SHEET PLUMBING ------------------------------------------------ */
