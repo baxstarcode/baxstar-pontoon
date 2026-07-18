@@ -336,7 +336,11 @@ async function main() {
     t('T1: stale local copy auto-removed', !w.getAllRentals().some(r => r.id === idH));
     t('T1: no zombie row in the Saved list', !/Zombie Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
 
-    /* ===== T2 — a NEWER edit deliberately resurrects (unlock-and-edit case) ===== */
+    /* ===== T2 (v8) — an incidental newer edit does NOT resurrect; the
+       explicit Restore button does. The rental stays OPEN on this device
+       (current), gets deleted from the other phone, then this device keeps
+       typing — v7 silently revived the zombie here; v8 parks the copy with a
+       banner and only a deliberate Restore re-syncs it. ===== */
     w.newRental();
     setVal(w, 'client', 'Lazarus Tester');
     setCheck(w, 'safety-4', true);
@@ -344,21 +348,144 @@ async function main() {
     const idI = w.getAllRentals().find(r => r.state.inputs.client === 'Lazarus Tester').id;
     w.enqueueDraftOp(idI, 'save');
     await w.processDraftQueue();
-    await mock({ action: 'deleteDraft', rentalId: idI });   // tombstone set
-    await sleep(60);                                        // ensure the edit out-dates the tombstone
+    await mock({ action: 'deleteDraft', rentalId: idI });   // "the other phone" deletes it
+    await sleep(60);
     setVal(w, 'out-notes', 'edited after the delete');
-    w.saveNow();                                            // bumps updatedAt past the tombstone
+    w.saveNow();                                            // newer updatedAt — v7's escape hatch
     w.enqueueDraftOp(idI, 'save');
     await w.processDraftQueue();
+    await sleep(100);
     let clI = await mock({ action: 'getActive' });
-    t('T2: newer edit clears the tombstone and re-syncs', clI.drafts.some(d => d.rentalId === idI), JSON.stringify(clI.drafts));
+    t('T2: incidental newer edit does NOT resurrect the cloud draft', !clI.drafts.some(d => d.rentalId === idI), JSON.stringify(clI.drafts));
     t('T2: local copy kept (open rental with fresh work)', w.getAllRentals().some(r => r.id === idI));
+    t('T2: copy parked as cloudTombstoned', !!(w.getAllRentals().find(r => r.id === idI) || {}).cloudTombstoned);
+    t('T2: tombstone banner visible with Restore', !w.document.getElementById('tombstone-banner').hidden);
+    t('T2: queue drained — no refusal retry loop', !w.getDraftQueue().some(e => e.rentalId === idI), JSON.stringify(w.getDraftQueue()));
+    // Parked copies stop pushing entirely — another save must not re-enqueue a send that gets refused again
+    setVal(w, 'out-notes', 'more edits while parked');
+    w.saveNow();
+    await w.processDraftQueue();
+    clI = await mock({ action: 'getActive' });
+    t('T2: parked copy stays local-only across further edits', !clI.drafts.some(d => d.rentalId === idI));
+    // Explicit Restore — the one deliberate path back
+    w.restoreTombstoned();
+    await w.processDraftQueue();
+    await sleep(100);
+    clI = await mock({ action: 'getActive' });
+    t('T2: Restore resurrects the cloud draft', clI.drafts.some(d => d.rentalId === idI), JSON.stringify(clI.drafts));
+    t('T2: cloudTombstoned flag cleared after Restore', !(w.getAllRentals().find(r => r.id === idI) || {}).cloudTombstoned);
+    t('T2: banner gone after Restore', w.document.getElementById('tombstone-banner').hidden);
+    // and normal syncing works again
+    setVal(w, 'out-notes', 'life after restore');
+    w.saveNow();
+    w.enqueueDraftOp(idI, 'save');
+    await w.processDraftQueue();
+    clI = await mock({ action: 'getActive', rentalId: idI });
+    t('T2: post-Restore edits sync normally', clI.ok && clI.draft.state.inputs['out-notes'] === 'life after restore');
 
     /* ===== T3 — finalize also tombstones (stale copy can't reopen a filed rental) ===== */
     const oldPush = await mock({ action: 'saveDraft', rentalId: idA, updatedAt: 1000, client: 'Handoff Tester', state: stateStub });
     t('T3: stale push against a FINALIZED rental is acknowledged but ignored', oldPush.ok === true && oldPush.tombstoned === true, JSON.stringify(oldPush));
+    t('T3: refusal carries reason finalized', oldPush.reason === 'finalized', JSON.stringify(oldPush));
     const clT3 = await mock({ action: 'getActive' });
     t('T3: filed rental does not reappear as a draft', !clT3.drafts.some(d => d.rentalId === idA));
+
+    /* ===== V1 (v8) — finalize tells the truth on screen: Filed ✓, never an
+       eternal "Syncing to cloud…". This is the exact mom's-phone case. ===== */
+    w.newRental();
+    setVal(w, 'client', 'Filed Tester');
+    setVal(w, 'email', 'filed@example.com');
+    setVal(w, 'out-time', '10:00');
+    drawSig(w, 'sig-out-rentee');
+    drawSig(w, 'sig-out-renter');
+    await sleep(100);
+    drawSig(w, 'sig-in-rentee');
+    drawSig(w, 'sig-in-renter');
+    await sleep(100);
+    w.saveNow();
+    const idV = w.getAllRentals().find(r => r.state.inputs.client === 'Filed Tester').id;
+    w.finalizeRental();
+    await sleep(600);                                       // finalize send drains
+    const recV = w.getAllRentals().find(r => r.id === idV);
+    t('V1: record marked FILED locally', !!recV.filedAt);
+    const syncBox = w.document.getElementById('sync-status');
+    const syncTxt = w.document.getElementById('sync-text').textContent;
+    t('V1: sync line reads Record filed ✓', /Record filed/.test(syncTxt) && syncBox.classList.contains('is-synced'), syncTxt);
+    const sigLine = w.document.getElementById('status-sig-in-rentee').textContent;
+    t('V1: sig lines terminal — on file, not "syncing…"', /record filed/.test(sigLine) && !/syncing/.test(sigLine), sigLine);
+    t('V1: no draft-queue entry for the filed rental', !w.getDraftQueue().some(e => e.rentalId === idV), JSON.stringify(w.getDraftQueue()));
+    // doSave must never touch a finalized record again
+    const upBefore = recV.updatedAt;
+    w.saveNow();
+    await sleep(50);
+    t('V1: doSave never bumps a finalized record', (w.getAllRentals().find(r => r.id === idV) || {}).updatedAt === upBefore);
+
+    /* ===== V2 (v8) — the Brady's-phone case: a stale device with an OPEN
+       copy of a rental that was finalized elsewhere learns the truth from
+       the tombstone refusal, locks, and shows FILED — no zombie draft. ===== */
+    w.newRental();
+    setVal(w, 'client', 'Elsewhere Tester');
+    setCheck(w, 'safety-1', true);
+    w.saveNow();
+    const idW = w.getAllRentals().find(r => r.state.inputs.client === 'Elsewhere Tester').id;
+    w.enqueueDraftOp(idW, 'save');
+    await w.processDraftQueue();
+    // "the other phone" finalizes the rental (tombstone reason: finalized)
+    const sig = 'data:image/png;base64,iVBORw0KGgo=';
+    const fin = await mock({ action: 'finalize', rentalId: idW, client: 'Elsewhere Tester',
+      customerEmail: '', summaryText: 'x'.repeat(150),
+      checkOut: { signatures: { rentee: sig, baxstar: sig } },
+      checkIn:  { signatures: { rentee: sig, baxstar: sig } } });
+    t('V2: cross-device finalize accepted by backend', fin.ok === true, JSON.stringify(fin));
+    // this device keeps touching its stale open copy (the app-open bump)
+    setVal(w, 'out-notes', 'stale touch after the filing');
+    w.saveNow();
+    w.enqueueDraftOp(idW, 'save');
+    await w.processDraftQueue();
+    await sleep(100);
+    const clW = await mock({ action: 'getActive' });
+    t('V2: stale touch did NOT resurrect the filed rental\'s draft', !clW.drafts.some(d => d.rentalId === idW), JSON.stringify(clW.drafts));
+    const recW = w.getAllRentals().find(r => r.id === idW);
+    t('V2: local copy marked finalized-elsewhere', !!(recW && recW.finalized && recW.finalizedElsewhere), JSON.stringify({ f: recW && recW.finalized, fe: recW && recW.finalizedElsewhere }));
+    t('V2: form locked on this device too', w.document.body.classList.contains('locked'));
+    t('V2: Saved list shows FILED', /FILED/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('V2: queue drained — refusals never loop', !w.getDraftQueue().some(e => e.rentalId === idW));
+    // Unlock is the deliberate escape hatch: it takes ownership back and resurrects
+    w.unlockRental();
+    await w.processDraftQueue();
+    await sleep(100);
+    const clW2 = await mock({ action: 'getActive' });
+    t('V2: Unlock deliberately resurrects the draft (resurrect push)', clW2.drafts.some(d => d.rentalId === idW), JSON.stringify(clW2.drafts));
+    await mock({ action: 'deleteDraft', rentalId: idW });   // leave the mock clean
+    w.newRental();
+
+    /* ===== V3 (v8) — persistent push failure surfaces loudly, tap retries ===== */
+    w.newRental();
+    setVal(w, 'client', 'Failing Tester');
+    setCheck(w, 'safety-2', true);
+    w.saveNow();
+    const idX = w.getAllRentals().find(r => r.state.inputs.client === 'Failing Tester').id;
+    const realFetch = w.fetch;
+    w.fetch = () => Promise.reject(new TypeError('mock network down'));
+    w.enqueueDraftOp(idX, 'save');
+    await w.processDraftQueue();
+    await w.processDraftQueue();
+    await w.processDraftQueue();
+    await sleep(100);
+    const qEntry = w.getDraftQueue().find(e => e.rentalId === idX);
+    t('V3: failures counted on the queue entry', !!qEntry && qEntry.attempts >= 3, JSON.stringify(qEntry));
+    const boxX = w.document.getElementById('sync-status');
+    t('V3: sync line turns loud after repeated failures', boxX.classList.contains('is-error') && /failing/i.test(w.document.getElementById('sync-text').textContent), w.document.getElementById('sync-text').textContent);
+    t('V3: data still safe locally', w.getAllRentals().some(r => r.id === idX));
+    // network returns; tapping the line retries and recovers
+    w.fetch = realFetch;
+    boxX.click();
+    await sleep(400);
+    const clX = await mock({ action: 'getActive' });
+    t('V3: tap-to-retry drains the queue once the network is back', clX.drafts.some(d => d.rentalId === idX) && !w.getDraftQueue().length, JSON.stringify(w.getDraftQueue()));
+    t('V3: sync line recovers to Synced ✓', boxX.classList.contains('is-synced'), w.document.getElementById('sync-text').textContent);
+    await mock({ action: 'deleteDraft', rentalId: idX });   // leave the mock clean
+    w.newRental();
 
   } catch (e) {
     results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
