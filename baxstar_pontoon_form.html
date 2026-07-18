@@ -516,6 +516,23 @@
   .sync-status.is-syncing .sync-dot { background: #d97706; }
   .sync-status.is-offline { color: #fb923c; }
   .sync-status.is-offline .sync-dot { background: #b45309; }
+  /* v8: persistent failure is loud, not an eternal "syncing" lie. Tappable to retry. */
+  .sync-status.is-error { color: #f87171; cursor: pointer; }
+  .sync-status.is-error .sync-dot { background: #dc2626; }
+
+  /* v8: rental deleted from another device — restore or discard, never a
+     silent zombie resurrection */
+  .tombstone-banner {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #3b2f10; border: 1px solid #b45309; border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #fcd34d;
+  }
+  .tombstone-banner span { flex: 1; min-width: 180px; }
+  .tombstone-banner button {
+    background: #1c1c20; border: 1px solid var(--line-strong); color: var(--text);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; font-weight: 600;
+    min-height: 44px;
+  }
   .session-actions {
     display: flex;
     gap: 8px;
@@ -785,6 +802,13 @@
     <button type="button" onclick="processQueue(true)">Retry now</button>
   </div>
 
+  <!-- v8: this rental's cloud draft was deleted from another device -->
+  <div class="tombstone-banner" id="tombstone-banner" hidden>
+    <span>This rental was deleted from another device. It is kept on this phone but no longer syncs.</span>
+    <button type="button" onclick="restoreTombstoned()">Restore &amp; re-sync</button>
+    <button type="button" onclick="deleteRental(currentRentalId)">Delete here too</button>
+  </div>
+
   <div class="saved-indicator" id="saved-indicator">Saved ✓</div>
 
   <!-- Top fields -->
@@ -1023,7 +1047,6 @@
        - client sanitized to letters/numbers/underscores ("Unnamed" if blank)
        - date is YYYY-MM-DD ("no_date" if blank)
        - bookingID falls back to "walkup" when blank
-
      {
        formType:    "baxstar_pontoon_checkin"  // constant — use for routing
        formVersion: 3                          // bumped if this shape changes
@@ -1783,6 +1806,18 @@
     const idx = rentals.findIndex(r => r.id === currentRentalId);
     const now = Date.now();
 
+    // v8: a finalized record is a filed document — routine save paths never
+    // rewrite its state or bump updatedAt. Post-finalize bumps were what froze
+    // the sig lines at "syncing…" forever (no push ever follows finalize) and
+    // let a stale phone's incidental touch out-date the finalize tombstone and
+    // resurrect the cloud draft. Unlock clears .finalized, so editing after an
+    // explicit unlock saves normally.
+    if (idx !== -1 && rentals[idx].finalized) {
+      dirty = false;
+      updateSigStatuses();
+      return true;
+    }
+
     if (!hasAnyContent(state)) {
       if (idx !== -1 && !rentals[idx].finalized) {
         const wasSynced = !!rentals[idx].cloudSyncedAt;
@@ -1965,6 +2000,16 @@
       if (!persisted) {
         line.className = 'sig-status warn';
         line.textContent = '⚠ SIGNATURE NOT SAVED YET — do not close this page';
+      } else if (r.finalized) {
+        // v8: terminal states for a finalized record — the draft-sync compare
+        // below can never be satisfied after finalize (updatedAt outruns the
+        // last push by design), so it read "syncing…" forever. The truth here
+        // is the FILING state, not the draft layer.
+        line.className = 'sig-status ok';
+        if (r.finalizedElsewhere) line.textContent = '✓ Signature saved · record filed from another device';
+        else if (r.filedAt) line.textContent = '✓ Signature on file — record filed';
+        else if (getQueue().some(q => q.rentalId === r.id)) line.textContent = '✓ Signature saved — filing record…';
+        else line.textContent = '✓ Signature saved on this phone';
       } else if (r.cloudSyncedAt && r.cloudUpdatedAt >= (r.updatedAt || 0)) {
         line.className = 'sig-status ok';
         line.textContent = '✓ Signature saved · synced to cloud';
@@ -2022,7 +2067,7 @@
      Phone tabs run old code for DAYS. The backend advertises the latest
      shipped form build; an older tab gets a can't-miss reload banner. Checked
      on load and whenever the tab becomes visible (throttled). */
-  const FORM_BUILD = 7;
+  const FORM_BUILD = 8;
   let lastUpdateCheck = 0;
   function checkForUpdate() {
     if (!webhookConfigured()) return;
@@ -2228,6 +2273,10 @@
       setQueue(remaining);
       updateQueueUI();
       renderRentalsList();
+      // v8: a confirmed filing flips the on-screen truth immediately —
+      // "Filing record…" becomes "Record filed ✓" the moment it lands.
+      updateSigStatuses();
+      updateSyncIndicator();
     } finally {
       queueBusy = false;
     }
@@ -2292,13 +2341,15 @@
   // cancellation.) Narrow tradeoff: if the user empties a rental and re-types
   // into the same record before the delete drains, that one debounced save is
   // dropped; the next edit/visibility/online trigger re-pushes the content.
-  function enqueueDraftOp(rentalId, op) {
+  function enqueueDraftOp(rentalId, op, opts) {
     if (!rentalId) return;
     const q = getDraftQueue();
     const existing = q.find(e => e.rentalId === rentalId);
     if (op === 'save' && existing && existing.op === 'delete') return;
     const rest = q.filter(e => e.rentalId !== rentalId);
-    rest.push({ rentalId, op, queuedAt: Date.now(), attempts: 0 });
+    // v8: resurrect marks a DELIBERATE revival of a tombstoned rental (unlock,
+    // or the Restore button) — the only pushes allowed to clear a tombstone.
+    rest.push({ rentalId, op, queuedAt: Date.now(), attempts: 0, resurrect: !!(opts && opts.resurrect) });
     setDraftQueue(rest);
     updateSyncIndicator();
   }
@@ -2365,6 +2416,10 @@
             const r = getAllRentals().find(x => x.id === entry.rentalId);
             if (!r) { handled.add(qkey(entry)); continue; }            // gone locally — drop it
             if (r.finalized) { handled.add(qkey(entry)); continue; }   // finalize cleans up the cloud draft
+            // v8: a copy the cloud already refused (deleted elsewhere) stays
+            // local-only until the user explicitly Restores it — keep pushing
+            // it and every push is a wasted refusal.
+            if (r.cloudTombstoned && !entry.resurrect) { handled.add(qkey(entry)); continue; }
             // If a delete got queued for this id while we were running, it wins —
             // never resurrect a draft the user just deleted.
             if (getDraftQueue().some(e => e.rentalId === entry.rentalId && e.op === 'delete')) {
@@ -2375,6 +2430,7 @@
               action: 'saveDraft',
               rentalId: r.id,
               updatedAt: r.updatedAt || Date.now(),
+              resurrect: !!entry.resurrect,
               client: meta.client, date: meta.date, pontoon: meta.pontoon,
               hasCheckIn: meta.hasCheckIn,
               // Day-1 copy: the backend emails THIS text when the 1-hour timer
@@ -2384,22 +2440,20 @@
               state: r.state
             });
             if (res.tombstoned) {
-              // The cloud refused this copy: the rental was finalized or
-              // deleted from another device AFTER this copy was last edited
-              // (the stale-zombie case). Drop the stale local copy — but
-              // never the rental open right now (its next edit out-dates the
-              // tombstone and syncs normally), and never a locally-finalized
-              // record (that's a filed document, not ours to remove).
-              if (entry.rentalId !== currentRentalId) {
-                const cur = getAllRentals();
-                const di = cur.findIndex(x => x.id === entry.rentalId);
-                if (di !== -1 && !cur[di].finalized) {
-                  cur.splice(di, 1);
-                  saveAllRentals(cur);
-                }
-              }
+              // The cloud refused this copy: the rental was finalized or its
+              // draft deleted from another device. res.reason says which on a
+              // v8 backend; an older backend sends no reason (and only refuses
+              // provably-stale copies) — keep its v7 behavior there.
+              handleTombstonedPush(entry.rentalId, res.reason);
             } else {
               recordCloudSynced(r.id, res.updatedAt);
+              // A successful resurrect push revives normal syncing.
+              if (entry.resurrect && r.cloudTombstoned) {
+                const cur = getAllRentals();
+                const ri = cur.findIndex(x => x.id === entry.rentalId);
+                if (ri !== -1) { delete cur[ri].cloudTombstoned; saveAllRentals(cur); }
+                updateTombstoneBanner();
+              }
             }
           }
           handled.add(qkey(entry));
@@ -2430,6 +2484,57 @@
         setTimeout(() => processDraftQueue(), 0);
       }
     }
+  }
+
+  // v8: a push came back tombstoned — the rental was finalized or its draft
+  // deleted from ANOTHER device. What happens to this phone's copy depends on
+  // which, and on whether it's the rental open on screen right now:
+  //   finalized + current   → lock it here too (the record is already filed;
+  //                           editing a stale copy of a filed document is
+  //                           never right) and say so in the status lines.
+  //   deleted + current     → keep it, stop pushing it, show the banner with
+  //                           an explicit Restore — no silent zombie, no
+  //                           silent data loss.
+  //   not current (either)  → drop the stale local copy, same as v7.
+  //   no reason (old backend, refuses only provably-stale copies) → v7
+  //                           behavior exactly: drop if not current.
+  function handleTombstonedPush(rentalId, reason) {
+    const rentals = getAllRentals();
+    const idx = rentals.findIndex(x => x.id === rentalId);
+    if (idx === -1 || rentals[idx].finalized) return;
+    if (rentalId !== currentRentalId) {
+      rentals.splice(idx, 1);
+      saveAllRentals(rentals);
+      return;
+    }
+    if (reason === 'finalized') {
+      rentals[idx].finalized = true;
+      rentals[idx].finalizedElsewhere = true;
+      saveAllRentals(rentals);
+      setLocked(true);
+      updateSigStatuses();
+      updateCurrentLabel();
+    } else if (reason === 'deleted') {
+      rentals[idx].cloudTombstoned = true;
+      saveAllRentals(rentals);
+      updateTombstoneBanner();
+    }
+    // reason absent (old backend) + current rental: leave it alone — the v7
+    // contract there is that the next edit out-dates the tombstone and syncs.
+  }
+
+  function updateTombstoneBanner() {
+    const el = document.getElementById('tombstone-banner');
+    if (!el) return;
+    const r = getAllRentals().find(x => x.id === currentRentalId);
+    el.hidden = !(r && r.cloudTombstoned);
+  }
+
+  // The Restore button: deliberately revive this rental's cloud draft.
+  function restoreTombstoned() {
+    if (!currentRentalId) return;
+    enqueueDraftOp(currentRentalId, 'save', { resurrect: true });
+    processDraftQueue();
   }
 
   // Pull the lightweight list of cloud drafts (no signatures) for the picker.
@@ -2497,11 +2602,42 @@
     const txt = document.getElementById('sync-text');
     if (!box || !txt) return;
     if (!webhookConfigured()) { box.hidden = true; return; }
-    const pending = getDraftQueue().length;
-    box.classList.remove('is-synced', 'is-syncing', 'is-offline');
+    box.classList.remove('is-synced', 'is-syncing', 'is-offline', 'is-error');
+    // v8: a finalized rental reports its FILING truth, not the draft queue.
+    // The draft layer stops at finalize on purpose — showing its state here
+    // was the eternal-"Syncing to cloud…" dead end.
+    const cur = getAllRentals().find(r => r.id === currentRentalId);
+    if (cur && cur.finalized) {
+      const q = getQueue().find(e => e.rentalId === cur.id);
+      if (cur.filedAt || cur.finalizedElsewhere) {
+        box.classList.add('is-synced'); txt.textContent = 'Record filed ✓';
+      } else if (navigator.onLine === false) {
+        box.classList.add('is-offline'); txt.textContent = 'Record safe on this phone — files when back online';
+      } else if (q && (q.attempts || 0) >= 3) {
+        box.classList.add('is-error'); txt.textContent = 'Filing failing — record safe on this phone · tap to retry';
+      } else if (q) {
+        box.classList.add('is-syncing'); txt.textContent = 'Filing record…';
+      } else {
+        // finalized, nothing queued, no filedAt: send confirmed before v8
+        // could stamp it, or another path drained the queue — filed is the
+        // only state that fits.
+        box.classList.add('is-synced'); txt.textContent = 'Record filed ✓';
+      }
+      box.hidden = false;
+      return;
+    }
+    const dq = getDraftQueue();
+    const pending = dq.length;
+    const failing = dq.some(e => (e.attempts || 0) >= 3);
     if (navigator.onLine === false) {
       box.classList.add('is-offline');
       txt.textContent = pending ? 'Offline — ' + pending + ' waiting to sync' : 'Offline';
+      box.hidden = false;
+    } else if (failing && !draftQueueBusy) {
+      // v8: repeated push failures surface loudly instead of hiding behind
+      // an endless "Syncing to cloud…". Data is safe locally; tap retries.
+      box.classList.add('is-error');
+      txt.textContent = 'Cloud sync failing — data safe on this phone · tap to retry';
       box.hidden = false;
     } else if (pending > 0 || draftQueueBusy) {
       box.classList.add('is-syncing');
@@ -2581,11 +2717,16 @@
     // Stop pushing this as an in-progress draft — the finalize send removes the
     // cloud draft server-side once it confirms. Superseding the pending push
     // here also avoids re-creating the draft after that deletion (same-day race).
+    // v8: kill the debounced push timer too — it re-enqueued a save AFTER this
+    // filter ran (harmless post-v8 since the queue skips finalized records,
+    // but the race shouldn't exist at all).
+    clearTimeout(cloudPushTimer);
     setDraftQueue(getDraftQueue().filter(q => q.rentalId !== rec.id));
     setLocked(true);
     renderRentalsList();
     updateQueueUI();
     updateSyncIndicator();
+    updateSigStatuses();
     processQueue();
     window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }
@@ -2597,18 +2738,24 @@
     if (idx !== -1) {
       rentals[idx].finalized = false;
       rentals[idx].unlockedAt = Date.now();
+      // v8: unlocking takes ownership again — it's a plain local draft now.
+      delete rentals[idx].finalizedElsewhere;
+      delete rentals[idx].cloudTombstoned;
       saveAllRentals(rentals);
     }
     // Drop any stale unsent payload — re-finalizing queues a fresh one
     setQueue(getQueue().filter(q => q.rentalId !== currentRentalId));
     setLocked(false);
-    // It's an in-progress draft again — finalize had removed the cloud copy,
-    // so push it back up for cross-device resume.
-    enqueueDraftOp(currentRentalId, 'save');
+    // It's an in-progress draft again — finalize had removed the cloud copy
+    // and tombstoned the id, so push it back up as a DELIBERATE resurrection
+    // (v8: only resurrect pushes may clear a tombstone).
+    enqueueDraftOp(currentRentalId, 'save', { resurrect: true });
     processDraftQueue();
     renderRentalsList();
     updateQueueUI();
     updateSyncIndicator();
+    updateSigStatuses();
+    updateTombstoneBanner();
   }
 
   /* ---- RENTAL SESSION MANAGEMENT --------------------------------------------- */
@@ -2646,6 +2793,8 @@
     dirty = false;
     updateCurrentLabel();
     renderRentalsList();
+    updateSyncIndicator();
+    updateTombstoneBanner();
     window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }
 
@@ -2664,6 +2813,8 @@
     dirty = false;
     updateCurrentLabel();
     renderRentalsList();
+    updateSyncIndicator();
+    updateTombstoneBanner();
     window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }
 
@@ -2763,7 +2914,7 @@
       if (isCurrent) badges += '<span class="badge">CURRENT</span>';
       if (r.finalized) {
         badges += '<span class="badge dark">FINALIZED</span>';
-        if (r.filedAt) badges += '<span class="badge done">FILED</span>';
+        if (r.filedAt || r.finalizedElsewhere) badges += '<span class="badge done">FILED</span>';
         else if (queuedIds.has(r.id)) badges += '<span class="badge amber">QUEUED</span>';
       } else {
         if (hasCheckIn) badges += '<span class="badge done">DONE</span>';
@@ -2836,6 +2987,12 @@
         document.getElementById('booking-chips').hidden = true;
       }
     });
+    // v8: the sync line is tappable when it reports failure — retry both queues
+    document.getElementById('sync-status').addEventListener('click', () => {
+      processQueue(true);
+      processDraftQueue(true);
+    });
+
     // Stale-tab update check: on load and whenever the tab comes back
     checkForUpdate();
     document.addEventListener('visibilitychange', () => {
@@ -2869,6 +3026,10 @@
     // flush the current rental to the cloud right then.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden' && currentRentalId) {
+        // v8: a finalized record rides the finalize queue, never the draft
+        // layer — pushing it from here was one of the stuck-"syncing" paths.
+        const cur = getAllRentals().find(r => r.id === currentRentalId);
+        if (cur && cur.finalized) return;
         saveNow();
         enqueueDraftOp(currentRentalId, 'save');
         processDraftQueue();
@@ -2895,6 +3056,7 @@
     renderRentalsList();
     updateBookingLink();
     updateQueueUI();
+    updateTombstoneBanner();
     processQueue();
     // Phase 2: flush any pending cloud pushes and pull the cloud draft list so
     // an in-progress rental started on another device shows up under "Saved".
