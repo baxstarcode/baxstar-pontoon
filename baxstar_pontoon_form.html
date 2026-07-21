@@ -2067,7 +2067,7 @@
      Phone tabs run old code for DAYS. The backend advertises the latest
      shipped form build; an older tab gets a can't-miss reload banner. Checked
      on load and whenever the tab becomes visible (throttled). */
-  const FORM_BUILD = 8;
+  const FORM_BUILD = 9;
   let lastUpdateCheck = 0;
   function checkForUpdate() {
     if (!webhookConfigured()) return;
@@ -2772,6 +2772,15 @@
       const canvas = document.getElementById(id);
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // v9 LEAK FIX: the sigData STORE must reset with the form, not just the
+      // canvas pixels. Before this, + New Rental carried the previous
+      // rental's signatures into the new record invisibly — the "blank"
+      // rental then had content, auto-saved, and synced to the cloud as an
+      // unnamed ghost wearing the last customer's signatures (found live
+      // 2026-07-21: Draft_r_1784613586788 held all 4 of the prior rental's
+      // sig images and nothing else). openRental is unaffected: applyState
+      // repopulates the store from the record being opened right after this.
+      sigData[id] = '';
     });
     document.getElementById('res-status').hidden = true;
     document.getElementById('booking-chips').hidden = true;
