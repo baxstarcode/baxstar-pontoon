@@ -487,6 +487,41 @@ async function main() {
     await mock({ action: 'deleteDraft', rentalId: idX });   // leave the mock clean
     w.newRental();
 
+    /* ===== V4 (v9) — signature-store leak: + New Rental must NOT carry the
+       previous rental's signatures into the fresh blank rental. Found live
+       2026-07-21: a "blank" unnamed rental synced to the cloud wearing all 4
+       of the prior rental's signature images, because clearForm wiped the
+       canvas pixels but not the sigData store. ===== */
+    w.newRental();
+    setVal(w, 'client', 'Leak Donor');
+    drawSig(w, 'sig-out-rentee');
+    drawSig(w, 'sig-out-renter');
+    await sleep(100);
+    drawSig(w, 'sig-in-rentee');
+    drawSig(w, 'sig-in-renter');
+    await sleep(100);
+    w.saveNow();
+    const idL = w.getAllRentals().find(r => r.state.inputs.client === 'Leak Donor').id;
+    t('V4 setup: donor rental holds 4 signatures', ['sig-out-rentee','sig-out-renter','sig-in-rentee','sig-in-renter'].every(k => (w.serializeState().sigs[k] || '').startsWith('data:image/')));
+    // The failing sequence: straight to + New Rental, then save the "blank" form
+    w.newRental();
+    const sigsAfterNew = w.serializeState().sigs;
+    t('V4: sig store empty after + New Rental (the leak fix)', ['sig-out-rentee','sig-out-renter','sig-in-rentee','sig-in-renter'].every(k => !sigsAfterNew[k]), JSON.stringify(Object.keys(sigsAfterNew).reduce((o,k)=>{o[k]=(sigsAfterNew[k]||'').length;return o;},{})));
+    w.saveNow();
+    await sleep(3200);                                       // past the 2.5s cloud debounce
+    await w.processDraftQueue();
+    const blankPersisted = w.getAllRentals().some(r => r.id !== idL && !(r.state.inputs.client || '').trim());
+    t('V4: blank new rental never persists locally', !blankPersisted, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state.inputs.client }))));
+    const clL = await mock({ action: 'getActive' });
+    t('V4: no unnamed ghost pushed to the cloud', !clL.drafts.some(d => d.rentalId !== idL && !(d.client || '').trim() && d.date >= todayIso()), JSON.stringify(clL.drafts));
+    t('V4: donor rental untouched — its own signatures intact', (w.getAllRentals().find(r => r.id === idL).state.sigs['sig-in-renter'] || '').startsWith('data:image/'));
+    // Reopening the donor must bring ITS signatures back (store repopulates from the record)
+    w.openRental(idL);
+    await sleep(200);
+    t('V4: openRental repopulates the store from the opened record', (w.serializeState().sigs['sig-out-rentee'] || '').startsWith('data:image/'));
+    w.deleteRental(idL);
+    await sleep(300);
+
   } catch (e) {
     results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
   }
