@@ -560,6 +560,28 @@
     border-color: var(--red);
   }
   .session-btn:active { transform: translateY(1px); }
+  /* v10: Discard is the only session button left — quiet until the form has
+     content, and never a full-width red slab someone fat-thumbs. */
+  .session-btn.danger { flex: 0 0 auto; color: var(--red-bright); padding: 12px 18px; }
+  /* v10: transient green confirmation — a record filed (and left this phone)
+     or a handoff rental was picked up. Self-hides. */
+  .filed-banner {
+    background: #0f2e1a; border: 1px solid #16a34a; border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #86efac;
+    font-weight: 600;
+  }
+  /* v10: the busy-form handoff offer (blank forms auto-open it instead) */
+  .handoff-banner {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #12233b; border: 1px solid #1d4ed8; border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: #93c5fd;
+  }
+  .handoff-banner span { flex: 1; min-width: 180px; }
+  .handoff-banner button {
+    background: #1c1c20; border: 1px solid var(--line-strong); color: var(--text);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; font-weight: 600;
+    min-height: 44px;
+  }
   .rentals-list {
     display: none;
     border-top: 1px solid var(--line);
@@ -788,12 +810,22 @@
       <div class="sync-status" id="sync-status" hidden><span class="sync-dot" id="sync-dot"></span><span id="sync-text">Synced</span></div>
     </div>
     <div class="session-actions">
-      <button class="session-btn" onclick="toggleRentalsList()">Saved (<span id="rentals-count">0</span>)</button>
-      <button class="session-btn primary" onclick="newRental()">+ New Rental</button>
+      <!-- v10: "Saved" list + "+ New Rental" removed (Brady 2026-07-21). The
+           app is one screen: open = the rental in progress, or blank. Discard
+           is the only session control left — it appears once the form has
+           content and is the escape hatch for a junk/abandoned rental. -->
+      <button class="session-btn danger" id="discard-btn" onclick="deleteRental(currentRentalId)" hidden>Discard</button>
     </div>
-    <div class="rentals-list" id="rentals-list">
-      <div id="rentals-list-items"></div>
-    </div>
+  </div>
+
+  <!-- v10: transient green confirmation (record filed / handoff adopted) -->
+  <div class="filed-banner" id="filed-banner" hidden></div>
+
+  <!-- v10: a rental is in progress elsewhere while THIS form is mid-rental.
+       (A blank form auto-opens it instead — this banner is the busy case.) -->
+  <div class="handoff-banner" id="handoff-banner" hidden>
+    <span id="handoff-msg"></span>
+    <button type="button" id="handoff-open-btn">Open it</button>
   </div>
 
   <!-- Unsent-records queue status -->
@@ -2067,7 +2099,7 @@
      Phone tabs run old code for DAYS. The backend advertises the latest
      shipped form build; an older tab gets a can't-miss reload banner. Checked
      on load and whenever the tab becomes visible (throttled). */
-  const FORM_BUILD = 9;
+  const FORM_BUILD = 10;
   let lastUpdateCheck = 0;
   function checkForUpdate() {
     if (!webhookConfigured()) return;
@@ -2224,11 +2256,24 @@
     // A finalize just landed — the backend's early-check-in gate may have
     // opened. Drop the 60s lookup cache so the next name check re-asks.
     resCache = null;
+    // v10: a CONFIRMED filing leaves the phone entirely. The record now lives
+    // in Drive (JSON + PDF + email) — keeping a locked local copy was how
+    // yesterday's rental greeted Brady on open. Only backend-confirmed sends
+    // reach here, so nothing unfiled can ever be wiped.
     const rentals = getAllRentals();
     const idx = rentals.findIndex(r => r.id === rentalId);
+    const name = idx !== -1
+      ? (((rentals[idx].state || {}).inputs || {}).client || '').trim() : '';
     if (idx !== -1) {
-      rentals[idx].filedAt = Date.now();
-      saveAllRentals(rentals);
+      rentals[idx] = null;
+      saveAllRentals(rentals.filter(Boolean));
+    }
+    if (rentalId === currentRentalId) {
+      // Null the id BEFORE resetting so no save path can re-create the record
+      currentRentalId = null;
+      startBlank();
+      showFiledBanner('Record filed ✓' + (name ? ' — ' + name : '') + ' · saved to Drive'
+        + ' — this phone is clear');
     }
   }
 
@@ -2489,9 +2534,10 @@
   // v8: a push came back tombstoned — the rental was finalized or its draft
   // deleted from ANOTHER device. What happens to this phone's copy depends on
   // which, and on whether it's the rental open on screen right now:
-  //   finalized + current   → lock it here too (the record is already filed;
-  //                           editing a stale copy of a filed document is
-  //                           never right) and say so in the status lines.
+  //   finalized + current   → v10: wipe it and clear the screen (the record
+  //                           is filed and lives in Drive; v8 locked the
+  //                           stale copy in place instead, which is the
+  //                           "yesterday's rental greets you on open" bug).
   //   deleted + current     → keep it, stop pushing it, show the banner with
   //                           an explicit Restore — no silent zombie, no
   //                           silent data loss.
@@ -2508,12 +2554,18 @@
       return;
     }
     if (reason === 'finalized') {
-      rentals[idx].finalized = true;
-      rentals[idx].finalizedElsewhere = true;
+      // v10: the other phone FILED this rental — it's done and in Drive.
+      // Wipe the stale copy and clear the screen (v8 locked it in place,
+      // which is exactly the "why is yesterday's rental here" screen).
+      const name = (((rentals[idx].state || {}).inputs || {}).client || '').trim();
+      rentals.splice(idx, 1);
       saveAllRentals(rentals);
-      setLocked(true);
-      updateSigStatuses();
-      updateCurrentLabel();
+      clearTimeout(cloudPushTimer);
+      setDraftQueue(getDraftQueue().filter(q => q.rentalId !== rentalId));
+      currentRentalId = null;
+      startBlank();
+      showFiledBanner('Record filed from the other phone ✓'
+        + (name ? ' — ' + name : '') + ' — this phone is clear');
     } else if (reason === 'deleted') {
       rentals[idx].cloudTombstoned = true;
       saveAllRentals(rentals);
@@ -2545,6 +2597,9 @@
       cloudDrafts = Array.isArray(res.drafts) ? res.drafts : [];
       maybeWarnNewerCloud();
       renderRentalsList();
+      // v10: a fresh cloud list is the adoption moment — if this form is
+      // blank and the other phone has a rental going, open it right here.
+      maybeAdoptHandoff();
     } catch (e) { /* offline or backend not yet updated — keep the local list */ }
   }
 
@@ -2556,11 +2611,16 @@
   // Open a draft that lives in the cloud (e.g. started on another device).
   // Adopts the ORIGINAL rentalId locally so later saves upsert the same cloud
   // file instead of forking a duplicate.
-  async function openCloudDraft(rentalId) {
+  async function openCloudDraft(rentalId, silent) {
     let draft;
     try { draft = await fetchCloudDraftFull(rentalId); }
-    catch (e) { alert('Could not load that draft from the cloud:\n' + ((e && e.message) || e)); return; }
-    if (!draft || !draft.state) { alert('That cloud draft was empty or unreadable.'); return; }
+    catch (e) {
+      // v10: auto-adoption passes silent — a blip here just means the next
+      // cloud refresh retries; never greet an opening app with an alert.
+      if (!silent) alert('Could not load that draft from the cloud:\n' + ((e && e.message) || e));
+      return;
+    }
+    if (!draft || !draft.state) { if (!silent) alert('That cloud draft was empty or unreadable.'); return; }
     const rentals = getAllRentals();
     const idx = rentals.findIndex(r => r.id === rentalId);
     const now = Date.now();
@@ -2791,20 +2851,27 @@
     updateSigStatuses();
   }
 
-  function newRental() {
-    saveNow();
+  // v10: reset to a fresh blank rental WITHOUT flushing the outgoing form
+  // first — callers that need the old rental saved do that themselves.
+  // (markFiled must NOT flush: its record was just wiped, and a save flush
+  // would re-create it from the still-on-screen fields.)
+  function startBlank() {
     currentRentalId = generateId();
     try { localStorage.setItem(ACTIVE_KEY, currentRentalId); } catch (e) { /* surfaced by save banner */ }
     setLocked(false);
     clearForm();
     document.getElementById('date').valueAsDate = new Date();
-    document.getElementById('rentals-list').style.display = 'none';
     dirty = false;
     updateCurrentLabel();
     renderRentalsList();
     updateSyncIndicator();
     updateTombstoneBanner();
     window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }
+
+  function newRental() {
+    saveNow();
+    startBlank();
   }
 
   function openRental(id) {
@@ -2818,7 +2885,6 @@
     clearForm();
     applyState(r.state);
     setLocked(!!r.finalized);
-    document.getElementById('rentals-list').style.display = 'none';
     dirty = false;
     updateCurrentLabel();
     renderRentalsList();
@@ -2856,11 +2922,6 @@
     }
   }
 
-  function toggleRentalsList() {
-    const list = document.getElementById('rentals-list');
-    list.style.display = list.style.display === 'none' || !list.style.display ? 'block' : 'none';
-  }
-
   function updateCurrentLabel() {
     const labelEl = document.getElementById('current-label');
     if (!labelEl) return;
@@ -2881,83 +2942,94 @@
     } else {
       labelEl.textContent = 'New rental — start by entering client name';
     }
+    updateDiscardBtn();
   }
 
+  /* v10: the Saved list is gone — this hook now keeps the two session
+     surfaces honest wherever the old list re-rendered: the Discard button
+     (visible only when an unlocked form has content) and the handoff banner
+     (a rental in progress SOMEWHERE ELSE while this form is mid-rental).
+     Pure display — cloud ADOPTION happens only in maybeAdoptHandoff(), on
+     load / reconnect / list-refresh, never on a keystroke. */
   function renderRentalsList() {
-    const list = document.getElementById('rentals-list-items');
-    if (!list) return;
-    const rentals = getAllRentals().sort((a, b) => b.updatedAt - a.updatedAt);
+    updateDiscardBtn();
+    updateHandoffBanner();
+  }
+
+  function updateDiscardBtn() {
+    const btn = document.getElementById('discard-btn');
+    if (!btn) return;
+    let busy = false;
+    try { busy = hasAnyContent(serializeState()); } catch (e) {}
+    btn.hidden = isLocked() || !busy;
+  }
+
+  // Every in-progress rental this device knows about that ISN'T on screen:
+  // cloud drafts from the other phone plus any local strays (pre-v10 storage
+  // could hold several). Newest first.
+  function handoffCandidates() {
+    const rentals = getAllRentals();
     const localIds = new Set(rentals.map(r => r.id));
-    // A cloud row with a delete queued against it is already gone as far as
-    // this device is concerned — hide it now so the row and the Saved count
-    // stay honest during the (possibly offline) gap before the delete drains
-    // and a fresh getActive confirms.
     const pendingDeletes = new Set(getDraftQueue().filter(e => e.op === 'delete').map(e => e.rentalId));
-    // Drafts that exist in the cloud but not on this device — the cross-device
-    // handoff rows (e.g. a checkout started on the other phone). rentalIds get
-    // interpolated into the inline onclick handlers below, so only ids matching
-    // the generator's charset (r_<ts>_<base36>) are rendered at all.
-    const cloudOnly = (cloudDrafts || []).filter(d => d && typeof d.rentalId === 'string'
-      && /^[\w-]+$/.test(d.rentalId)
-      && !localIds.has(d.rentalId) && !pendingDeletes.has(d.rentalId) && !d.finalized);
-    const countEl = document.getElementById('rentals-count');
-    if (countEl) countEl.textContent = rentals.length + cloudOnly.length;
+    const local = rentals
+      .filter(r => r.id !== currentRentalId && !r.finalized && !r.cloudTombstoned)
+      .map(r => ({ id: r.id, cloud: false, updatedAt: r.updatedAt || 0,
+        client: (((r.state || {}).inputs || {}).client || '').trim() }));
+    const cloud = (cloudDrafts || [])
+      .filter(d => d && typeof d.rentalId === 'string' && /^[\w-]+$/.test(d.rentalId)
+        && !d.finalized && d.rentalId !== currentRentalId
+        && !localIds.has(d.rentalId) && !pendingDeletes.has(d.rentalId))
+      .map(d => ({ id: d.rentalId, cloud: true, updatedAt: d.updatedAt || 0,
+        client: (d.client || '').trim() }));
+    return local.concat(cloud).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
 
-    if (rentals.length === 0 && cloudOnly.length === 0) {
-      list.innerHTML = '<div style="padding: 16px; color: var(--muted); font-size: 13px; text-align: center;">No saved rentals yet</div>';
-      return;
-    }
+  function openHandoff(c, silent) {
+    if (c.cloud) { openCloudDraft(c.id, silent); } else { openRental(c.id); }
+  }
 
-    const queuedIds = new Set(getQueue().map(q => q.rentalId));
-    const draftSyncing = new Set(getDraftQueue().filter(e => e.op === 'save').map(e => e.rentalId));
+  function updateHandoffBanner() {
+    const banner = document.getElementById('handoff-banner');
+    if (!banner) return;
+    const cands = handoffCandidates();
+    let busy = false;
+    try { busy = hasAnyContent(serializeState()); } catch (e) {}
+    if (!cands.length || (!busy && !isLocked())) { banner.hidden = true; return; }
+    const c = cands[0];
+    document.getElementById('handoff-msg').textContent =
+      (c.client || 'A rental') + ' is in progress'
+      + (c.cloud ? ' on the other phone' : ' on this phone')
+      + (cands.length > 1 ? ' (+' + (cands.length - 1) + ' more)' : '')
+      + ' — finish or discard this one, or switch now.';
+    document.getElementById('handoff-open-btn').onclick = () => { saveNow(); openHandoff(c); };
+    banner.hidden = false;
+  }
 
-    const localHtml = rentals.map(r => {
-      const s = r.state || {};
-      const client = s.inputs?.client || '(unnamed)';
-      const date = s.inputs?.date || '';
-      const pontoon = s.inputs?.pontoon || '';
-      const isCurrent = r.id === currentRentalId;
-      const hasCheckIn = !!(s.inputs?.['in-time'] || s.sigs?.['sig-in-rentee']);
-      const meta = [date, pontoon, hasCheckIn ? 'Check-in done' : 'Check-out only'].filter(Boolean).join(' · ');
-      let badges = '';
-      if (isCurrent) badges += '<span class="badge">CURRENT</span>';
-      if (r.finalized) {
-        badges += '<span class="badge dark">FINALIZED</span>';
-        if (r.filedAt || r.finalizedElsewhere) badges += '<span class="badge done">FILED</span>';
-        else if (queuedIds.has(r.id)) badges += '<span class="badge amber">QUEUED</span>';
-      } else {
-        if (hasCheckIn) badges += '<span class="badge done">DONE</span>';
-        if (draftSyncing.has(r.id)) badges += '<span class="badge amber">SYNCING</span>';
-        else if (r.cloudSyncedAt) badges += '<span class="badge cloud">CLOUD</span>';
-      }
-      return `
-        <div class="rental-row ${isCurrent ? 'current' : ''}">
-          <div class="rental-info">
-            <div class="rental-name">${escapeHtml(client)}${badges}</div>
-            <div class="rental-meta">${escapeHtml(meta)}</div>
-          </div>
-          ${isCurrent ? '' : `<button class="rental-action" onclick="openRental('${r.id}')">Open</button>`}
-          <button class="rental-action danger" onclick="deleteRental('${r.id}')">✕</button>
-        </div>
-      `;
-    }).join('');
+  // The cross-device pickup, minus the Saved list: a BLANK form adopts the
+  // in-progress rental automatically — walk up to the boat, open the app,
+  // the checkout your partner started is just there. A busy form is never
+  // stolen; updateHandoffBanner offers the switch instead.
+  function maybeAdoptHandoff() {
+    if (isLocked()) return;
+    let blank = false;
+    try { blank = !hasAnyContent(serializeState()); } catch (e) { return; }
+    if (!blank) { updateHandoffBanner(); return; }
+    const cands = handoffCandidates();
+    if (!cands.length) { updateHandoffBanner(); return; }
+    const c = cands[0];
+    openHandoff(c, true);
+    showFiledBanner('Continuing ' + (c.client || 'the open rental')
+      + (c.cloud ? ' — started on the other phone' : ''));
+  }
 
-    const cloudHtml = cloudOnly.map(d => {
-      const meta = [d.date, d.pontoon, d.hasCheckIn ? 'Check-in started' : 'Check-out only', 'from another device']
-        .filter(Boolean).join(' · ');
-      return `
-        <div class="rental-row">
-          <div class="rental-info">
-            <div class="rental-name">${escapeHtml(d.client || '(unnamed)')}<span class="badge cloud">CLOUD</span></div>
-            <div class="rental-meta">${escapeHtml(meta)}</div>
-          </div>
-          <button class="rental-action" onclick="openCloudDraft('${d.rentalId}')">Open</button>
-          <button class="rental-action danger" onclick="deleteRental('${d.rentalId}')">✕</button>
-        </div>
-      `;
-    }).join('');
-
-    list.innerHTML = localHtml + cloudHtml;
+  let filedBannerTimer = null;
+  function showFiledBanner(text) {
+    const el = document.getElementById('filed-banner');
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(filedBannerTimer);
+    filedBannerTimer = setTimeout(() => { el.hidden = true; }, 8000);
   }
 
   /* ---- INIT ----------------------------------------------------------------- */
@@ -3045,17 +3117,33 @@
       }
     });
 
-    // Restore active rental or create new
+    // v10 sweep: filed records do not live on phones. Anything already
+    // confirmed-filed (filedAt), filed from the other device
+    // (finalizedElsewhere), or finalized with NO send still queued (v8's
+    // "confirmed before filedAt could stamp" state) is done and in Drive —
+    // wipe it, including yesterday's records left by pre-v10 builds. A
+    // finalized record whose send is still QUEUED is not confirmed yet: it
+    // stays (invisible, retrying via the queue bar) until markFiled wipes it.
+    {
+      const queuedSends = new Set(getQueue().map(q => q.rentalId));
+      const all = getAllRentals();
+      const keep = all.filter(r => !(r.filedAt || r.finalizedElsewhere
+        || (r.finalized && !queuedSends.has(r.id))));
+      if (keep.length !== all.length) saveAllRentals(keep);
+    }
+
+    // v10: opening the app = the rental in progress, or a blank form ready
+    // to go. A finalized-but-unconfirmed record never re-greets on open —
+    // the queue bar reports it until its send confirms.
     const activeId = (() => {
       try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; }
     })();
     const rentals = getAllRentals();
     const existingActive = activeId ? rentals.find(r => r.id === activeId) : null;
 
-    if (existingActive) {
+    if (existingActive && !existingActive.finalized) {
       currentRentalId = activeId;
       applyState(existingActive.state);
-      setLocked(!!existingActive.finalized);
     } else {
       currentRentalId = generateId();
       try { localStorage.setItem(ACTIVE_KEY, currentRentalId); } catch (e) { /* probed above */ }
@@ -3072,6 +3160,10 @@
     updateSyncIndicator();
     processDraftQueue();
     fetchCloudDrafts();
+    // v10: local strays (pre-v10 storage could hold several in-progress
+    // rentals) adopt onto a blank form immediately, no network needed; the
+    // cloud pass re-runs adoption when fetchCloudDrafts lands.
+    maybeAdoptHandoff();
   }
 
   // Wait for canvases to be sized before applying state
