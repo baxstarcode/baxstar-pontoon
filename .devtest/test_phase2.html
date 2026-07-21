@@ -125,17 +125,13 @@ async function main() {
     w.localStorage.clear();
     f = await reloadFrame(f); w = f.contentWindow;
     w.confirm = () => true; w.alert = () => {};
-    t('B: fresh device has no local rentals', w.getAllRentals().length === 0, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state && r.state.inputs && r.state.inputs.client }))));
-
-    await w.fetchCloudDrafts();
-    const listHtml = w.document.getElementById('rentals-list-items').innerHTML;
-    t('B: cloud draft shows in Saved panel as a CLOUD row', /CLOUD/.test(listHtml) && /Handoff Tester/.test(listHtml), listHtml.replace(/\s+/g, ' ').slice(0, 160));
-
-    await w.openCloudDraft(idA);
+    // v10: a fresh phone doesn't browse a Saved list — its blank form ADOPTS
+    // the in-progress cloud rental automatically during load.
+    for (let i = 0; i < 60 && w.document.getElementById('client').value === ''; i++) await sleep(100);
     await sleep(600);   // let hydrated signature images redraw
-    t('DIAG B: rentals after open', true, JSON.stringify(w.getAllRentals().map(r => ({ id: r.id, c: r.state.inputs.client }))) + ' active=' + w.localStorage.getItem('baxstar_active_rental_id') + ' idA=' + idA);
-    t('B: opening cloud draft hydrates checkout fields', w.document.getElementById('client').value === 'Handoff Tester' && w.document.getElementById('out-time').value === '09:00');
-    t('B: original rentalId adopted (no duplicate fork)', w.getAllRentals().length === 1 && w.getAllRentals()[0].id === idA);
+    t('B: blank fresh device AUTO-ADOPTS the cloud rental (v10)', w.document.getElementById('client').value === 'Handoff Tester' && w.document.getElementById('out-time').value === '09:00', 'client=' + w.document.getElementById('client').value);
+    t('B: original rentalId adopted (no duplicate fork)', w.getAllRentals().length === 1 && w.getAllRentals()[0].id === idA, JSON.stringify(w.getAllRentals().map(r => r.id)) + ' idA=' + idA);
+    t('B: adoption announced in the green banner', !w.document.getElementById('filed-banner').hidden && /Continuing/.test(w.document.getElementById('filed-banner').textContent), w.document.getElementById('filed-banner').textContent);
     t('B: checkout signature restored on this device', (w.serializeState().sigs['sig-out-rentee'] || '').startsWith('data:image/'));
 
     // Finish the check-in on device B and finalize.
@@ -148,7 +144,9 @@ async function main() {
     w.finalizeRental();
     await sleep(1600);
     t('B: finalize filed the record (send queue drained)', w.getQueue().length === 0, JSON.stringify(w.getQueue().map(q => q.lastError)));
-    t('B: record marked FILED locally', !!(w.getAllRentals().find(r => r.id === idA) || {}).filedAt);
+    t('B: v10 confirmed filing WIPES the record off the phone', !w.getAllRentals().some(r => r.id === idA), JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('B: screen resets to a blank unlocked form', w.document.getElementById('client').value === '' && !w.document.body.classList.contains('locked'));
+    t('B: filed confirmation banner shown', !w.document.getElementById('filed-banner').hidden && /Record filed/.test(w.document.getElementById('filed-banner').textContent), w.document.getElementById('filed-banner').textContent);
     cl = await mock({ action: 'getActive' });
     t('B: finalize removed the in-progress cloud draft', cl.ok && !cl.drafts.some(d => d.rentalId === idA), JSON.stringify(cl.drafts));
 
@@ -169,9 +167,7 @@ async function main() {
     await sleep(500);
     clC = await mock({ action: 'getActive' });
     t('C: deleting the rental removed its cloud draft', !clC.drafts.some(d => d.rentalId === idC), JSON.stringify(clC.drafts));
-    const htmlC = w.document.getElementById('rentals-list-items').innerHTML;
-    t('C: no ghost CLOUD row after delete (stale cache pruned)', !/ToDelete Tester/.test(htmlC), htmlC.replace(/\s+/g, ' ').slice(0, 160));
-    t('C: Saved counter matches visible rows', w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length), w.document.getElementById('rentals-count').textContent);
+    t('C: no ghost handoff candidate after delete (stale cache pruned)', !w.handoffCandidates().some(c => c.id === idC), JSON.stringify(w.handoffCandidates()));
 
     /* ===== D — offline-first: queues offline, auto-pushes on reconnect ===== */
     w.newRental();
@@ -196,26 +192,25 @@ async function main() {
     const idE = 'r_1750000000001_cldel1';
     await mock({ action: 'saveDraft', rentalId: idE, updatedAt: 1750000000001, client: 'CloudOnly Tester', date: '2026-07-01', pontoon: 'Unit 9', hasCheckIn: false, state: stateStub });
     await w.fetchCloudDrafts();
-    let htmlE = w.document.getElementById('rentals-list-items').innerHTML;
-    t('E: cloud-only row renders a delete ✕', /CloudOnly Tester/.test(htmlE) && htmlE.indexOf("deleteRental('" + idE + "')") !== -1, htmlE.replace(/\s+/g, ' ').slice(0, 200));
+    await sleep(200);
+    t('E: cloud-only rental surfaces as a handoff candidate', w.handoffCandidates().some(c => c.id === idE && c.cloud), JSON.stringify(w.handoffCandidates()));
+    t('E: busy form is never stolen — banner offers the switch instead', !w.document.getElementById('handoff-banner').hidden && /CloudOnly Tester/.test(w.document.getElementById('handoff-msg').textContent) && w.document.getElementById('client').value === 'Offline Tester', w.document.getElementById('handoff-msg').textContent);
     w.deleteRental(idE);
     await sleep(400);
-    htmlE = w.document.getElementById('rentals-list-items').innerHTML;
-    t('E: ✕ on cloud-only row removes it with no ghost', !/CloudOnly Tester/.test(htmlE));
+    t('E: delete removes the candidate with no ghost', !w.handoffCandidates().some(c => c.id === idE));
     let clE = await mock({ action: 'getActive' });
     t('E: cloud-only delete reached the backend', clE.ok && !clE.drafts.some(d => d.rentalId === idE), JSON.stringify(clE.drafts));
-    t('E: Saved counter matches visible rows after cloud delete', w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length), w.document.getElementById('rentals-count').textContent);
 
     /* ===== F — offline cloud-only delete: hidden immediately, drains on reconnect ===== */
     const idF = 'r_1750000000002_cldel2';
     await mock({ action: 'saveDraft', rentalId: idF, updatedAt: 1750000000002, client: 'OfflineCloud Tester', date: '2026-07-02', pontoon: 'Unit 4', hasCheckIn: false, state: stateStub });
     await w.fetchCloudDrafts();
-    t('F: cloud-only row visible before offline delete', /OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('F: cloud-only candidate visible before offline delete', w.handoffCandidates().some(c => c.id === idF));
     setOnline(w, false);
     w.deleteRental(idF);
     await sleep(300);
     t('F: offline delete stays queued', w.getDraftQueue().some(e => e.rentalId === idF && e.op === 'delete'), JSON.stringify(w.getDraftQueue()));
-    t('F: row + count hide while the delete is queued offline', !/OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML) && w.document.getElementById('rentals-count').textContent === String(w.document.querySelectorAll('#rentals-list-items .rental-row').length));
+    t('F: candidate hidden while the delete is queued offline', !w.handoffCandidates().some(c => c.id === idF), JSON.stringify(w.handoffCandidates()));
     let clF = await mock({ action: 'getActive' });
     t('F: nothing deleted in the cloud while offline', clF.drafts.some(d => d.rentalId === idF));
     setOnline(w, true);
@@ -223,15 +218,15 @@ async function main() {
     await sleep(800);
     clF = await mock({ action: 'getActive' });
     t('F: reconnect drains the queued cloud-only delete', !clF.drafts.some(d => d.rentalId === idF), JSON.stringify(w.getDraftQueue()));
-    t('F: still no ghost after the queue drains', !/OfflineCloud Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('F: still no ghost after the queue drains', !w.handoffCandidates().some(c => c.id === idF));
 
-    /* ===== G — a cloud draft with an unsafe rentalId is never rendered =====
-       rentalIds are interpolated into inline onclick handlers; the list only
-       renders ids matching the generator's charset. */
+    /* ===== G — a cloud draft with an unsafe rentalId is never surfaced =====
+       v10: ids feed handoff adoption; only ids matching the generator's
+       charset become candidates at all. */
     const badId = "x') ;alert(1);('";
     await mock({ action: 'saveDraft', rentalId: badId, updatedAt: 1750000000003, client: 'Evil Tester', date: '2026-07-03', pontoon: '', hasCheckIn: false, state: stateStub });
     await w.fetchCloudDrafts();
-    t('G: unsafe rentalId is filtered out of the list', !/Evil Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('G: unsafe rentalId is never a handoff candidate (id charset filter)', !w.handoffCandidates().some(c => c.client === 'Evil Tester'), JSON.stringify(w.handoffCandidates()));
     await mock({ action: 'deleteDraft', rentalId: badId });   // cleanup
 
     /* ===== H — Phase 3: FareHarbor Gmail-scan lookup feeds the advisory =====
@@ -334,7 +329,7 @@ async function main() {
     clH = await mock({ action: 'getActive' });
     t('T1: zombie did NOT reappear in the cloud', !clH.drafts.some(d => d.rentalId === idH), JSON.stringify(clH.drafts));
     t('T1: stale local copy auto-removed', !w.getAllRentals().some(r => r.id === idH));
-    t('T1: no zombie row in the Saved list', !/Zombie Tester/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('T1: no zombie handoff candidate', !w.handoffCandidates().some(c => c.id === idH));
 
     /* ===== T2 (v8) — an incidental newer edit does NOT resurrect; the
        explicit Restore button does. The rental stays OPEN on this device
@@ -390,8 +385,9 @@ async function main() {
     const clT3 = await mock({ action: 'getActive' });
     t('T3: filed rental does not reappear as a draft', !clT3.drafts.some(d => d.rentalId === idA));
 
-    /* ===== V1 (v8) — finalize tells the truth on screen: Filed ✓, never an
-       eternal "Syncing to cloud…". This is the exact mom's-phone case. ===== */
+    /* ===== V1 (v8→v10) — finalize tells the truth, then v10 clears the deck:
+       the mom's-phone case ends with a wiped record + blank form, never an
+       eternal "Syncing to cloud…" and never a lingering locked screen. ===== */
     w.newRental();
     setVal(w, 'client', 'Filed Tester');
     setVal(w, 'email', 'filed@example.com');
@@ -406,23 +402,17 @@ async function main() {
     const idV = w.getAllRentals().find(r => r.state.inputs.client === 'Filed Tester').id;
     w.finalizeRental();
     await sleep(600);                                       // finalize send drains
-    const recV = w.getAllRentals().find(r => r.id === idV);
-    t('V1: record marked FILED locally', !!recV.filedAt);
-    const syncBox = w.document.getElementById('sync-status');
-    const syncTxt = w.document.getElementById('sync-text').textContent;
-    t('V1: sync line reads Record filed ✓', /Record filed/.test(syncTxt) && syncBox.classList.contains('is-synced'), syncTxt);
-    const sigLine = w.document.getElementById('status-sig-in-rentee').textContent;
-    t('V1: sig lines terminal — on file, not "syncing…"', /record filed/.test(sigLine) && !/syncing/.test(sigLine), sigLine);
+    t('V1: send queue drained (filing confirmed)', w.getQueue().length === 0, JSON.stringify(w.getQueue().map(q => q.lastError)));
+    t('V1: v10 confirmed filing wipes the record off the phone', !w.getAllRentals().some(r => r.id === idV), JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('V1: screen resets to a blank unlocked form', w.document.getElementById('client').value === '' && !w.document.body.classList.contains('locked'));
+    t('V1: filed banner tells the truth — Record filed, never eternal syncing', !w.document.getElementById('filed-banner').hidden && /Record filed/.test(w.document.getElementById('filed-banner').textContent), w.document.getElementById('filed-banner').textContent);
     t('V1: no draft-queue entry for the filed rental', !w.getDraftQueue().some(e => e.rentalId === idV), JSON.stringify(w.getDraftQueue()));
-    // doSave must never touch a finalized record again
-    const upBefore = recV.updatedAt;
-    w.saveNow();
-    await sleep(50);
-    t('V1: doSave never bumps a finalized record', (w.getAllRentals().find(r => r.id === idV) || {}).updatedAt === upBefore);
+    t('V1: sig status lines cleared with the blank form', w.document.getElementById('status-sig-in-rentee').hidden);
 
-    /* ===== V2 (v8) — the Brady's-phone case: a stale device with an OPEN
-       copy of a rental that was finalized elsewhere learns the truth from
-       the tombstone refusal, locks, and shows FILED — no zombie draft. ===== */
+    /* ===== V2 (v8→v10) — the Brady's-phone case: a stale device with an OPEN
+       copy of a rental that was finalized elsewhere learns the truth from the
+       tombstone refusal. v10: the stale copy WIPES and the screen goes blank
+       (v8 locked it in place — the Chad-greets-you-next-morning bug). ===== */
     w.newRental();
     setVal(w, 'client', 'Elsewhere Tester');
     setCheck(w, 'safety-1', true);
@@ -445,19 +435,10 @@ async function main() {
     await sleep(100);
     const clW = await mock({ action: 'getActive' });
     t('V2: stale touch did NOT resurrect the filed rental\'s draft', !clW.drafts.some(d => d.rentalId === idW), JSON.stringify(clW.drafts));
-    const recW = w.getAllRentals().find(r => r.id === idW);
-    t('V2: local copy marked finalized-elsewhere', !!(recW && recW.finalized && recW.finalizedElsewhere), JSON.stringify({ f: recW && recW.finalized, fe: recW && recW.finalizedElsewhere }));
-    t('V2: form locked on this device too', w.document.body.classList.contains('locked'));
-    t('V2: Saved list shows FILED', /FILED/.test(w.document.getElementById('rentals-list-items').innerHTML));
+    t('V2: v10 wipes the stale copy — the record is filed and lives in Drive', !w.getAllRentals().some(r => r.id === idW), JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('V2: screen resets to a blank unlocked form (no locked greeting)', w.document.getElementById('client').value === '' && !w.document.body.classList.contains('locked'));
+    t('V2: banner says filed from the other phone', !w.document.getElementById('filed-banner').hidden && /other phone/.test(w.document.getElementById('filed-banner').textContent), w.document.getElementById('filed-banner').textContent);
     t('V2: queue drained — refusals never loop', !w.getDraftQueue().some(e => e.rentalId === idW));
-    // Unlock is the deliberate escape hatch: it takes ownership back and resurrects
-    w.unlockRental();
-    await w.processDraftQueue();
-    await sleep(100);
-    const clW2 = await mock({ action: 'getActive' });
-    t('V2: Unlock deliberately resurrects the draft (resurrect push)', clW2.drafts.some(d => d.rentalId === idW), JSON.stringify(clW2.drafts));
-    await mock({ action: 'deleteDraft', rentalId: idW });   // leave the mock clean
-    w.newRental();
 
     /* ===== V3 (v8) — persistent push failure surfaces loudly, tap retries ===== */
     w.newRental();
@@ -521,6 +502,76 @@ async function main() {
     t('V4: openRental repopulates the store from the opened record', (w.serializeState().sigs['sig-out-rentee'] || '').startsWith('data:image/'));
     w.deleteRental(idL);
     await sleep(300);
+
+    /* ===== W1 (v10) — opening the app: filed leftovers sweep off, the
+       in-progress rental is what greets you. Seeds pre-v10 storage shapes
+       directly (the Chad case: yesterday's FILED rental was the active
+       record and greeted Brady locked). ===== */
+    try { await fetch('http://localhost:8809/__reset', { method: 'POST' }); } catch (e) {}
+    w.localStorage.clear();
+    const mkRec = (id, client, up, extra) => ({ id, createdAt: 1, updatedAt: up,
+      state: { inputs: { client, date: '2026-07-20' }, checks: { 'safety-0': true }, sigs: {}, marks: { out: [], in: [] } },
+      ...(extra || {}) });
+    w.saveAllRentals([
+      mkRec('r_1000_filed', 'Chad Filed', 5, { finalized: true, finalizedAt: 4, filedAt: 6 }),
+      mkRec('r_1001_else', 'Elsewhere Filed', 5, { finalized: true, finalizedElsewhere: true }),
+      mkRec('r_1002_conf', 'Confirmed PreV10', 5, { finalized: true }),
+      mkRec('r_1003_open', 'Open Rental', 9)
+    ]);
+    w.localStorage.setItem('baxstar_active_rental_id', 'r_1000_filed');
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    await sleep(400);
+    t('W1: filed/elsewhere/confirmed records swept off the phone on open', !w.getAllRentals().some(r => ['r_1000_filed', 'r_1001_else', 'r_1002_conf'].includes(r.id)), JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('W1: the in-progress rental survives the sweep', w.getAllRentals().some(r => r.id === 'r_1003_open'));
+    t('W1: no locked yesterday-rental greeting', !w.document.body.classList.contains('locked'));
+    t('W1: blank open adopts the in-progress stray automatically', w.document.getElementById('client').value === 'Open Rental', w.document.getElementById('client').value);
+
+    /* ===== W2 (v10) — a finalized record whose send has NOT confirmed stays
+       on the phone (retrying via the queue bar) but never re-greets. ===== */
+    try { await fetch('http://localhost:8809/__reset', { method: 'POST' }); } catch (e) {}
+    // Blank the adopted rental FIRST: the reload's own hide-flush would
+    // otherwise re-save the on-screen rental into the freshly seeded storage
+    // (test artifact of two "phones" sharing one window).
+    w.newRental();
+    await sleep(100);
+    w.localStorage.clear();
+    w.saveAllRentals([mkRec('r_2000_pend', 'Pending Send', 5, { finalized: true, finalizedAt: 4 })]);
+    w.setQueue([{ rentalId: 'r_2000_pend', payload: { rentalId: 'r_2000_pend', client: 'Pending Send' }, queuedAt: 1, attempts: 0 }]);
+    w.localStorage.setItem('baxstar_active_rental_id', 'r_2000_pend');
+    f = await reloadFrame(f); w = f.contentWindow;
+    w.confirm = () => true; w.alert = () => {};
+    await sleep(600);
+    t('W2: unconfirmed finalized record survives the sweep (never wiped unconfirmed)', w.getAllRentals().some(r => r.id === 'r_2000_pend'), JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('W2: but never re-greets — screen opens blank + unlocked', w.document.getElementById('client').value === '' && !w.document.body.classList.contains('locked'));
+    t('W2: still queued for filing, queue bar reports it', w.getQueue().length === 1 && !w.document.getElementById('queue-bar').hidden, (w.document.getElementById('queue-bar').textContent || '').trim());
+
+    /* ===== W3 (v10) — Discard: the one session control left ===== */
+    t('W3: discard hidden on a blank form', w.document.getElementById('discard-btn').hidden);
+    setVal(w, 'client', 'Junk Draft');
+    await sleep(700);
+    t('W3: discard appears once the form has content', !w.document.getElementById('discard-btn').hidden);
+    const idJ = (w.getAllRentals().find(r => (r.state.inputs.client || '') === 'Junk Draft') || {}).id;
+    w.document.getElementById('discard-btn').click();
+    await sleep(400);
+    t('W3: discard wipes the junk rental and resets blank', !w.getAllRentals().some(r => r.id === idJ) && w.document.getElementById('client').value === '', JSON.stringify(w.getAllRentals().map(r => r.id)));
+    t('W3: discard hides again on the blank form', w.document.getElementById('discard-btn').hidden);
+
+    /* ===== W4 (v10) — the other phone's rental while THIS phone is mid-
+       rental: offered in the banner, never stolen; Open switches. ===== */
+    setVal(w, 'client', 'Busy Here');
+    setCheck(w, 'safety-2', true);
+    await sleep(700);
+    await mock({ action: 'saveDraft', rentalId: 'r_3000_hand', updatedAt: Date.now(), client: 'Other Phone', date: '2026-07-21', pontoon: '', hasCheckIn: false,
+      state: { inputs: { client: 'Other Phone', date: '2026-07-21' }, checks: {}, sigs: {}, marks: { out: [], in: [] } } });
+    await w.fetchCloudDrafts();
+    await sleep(300);
+    t('W4: busy form keeps its rental (no steal)', w.document.getElementById('client').value === 'Busy Here');
+    t("W4: handoff banner offers the other phone's rental", !w.document.getElementById('handoff-banner').hidden && /Other Phone/.test(w.document.getElementById('handoff-msg').textContent), w.document.getElementById('handoff-msg').textContent);
+    w.document.getElementById('handoff-open-btn').click();
+    await sleep(900);
+    t("W4: Open switches to the other phone's rental", w.document.getElementById('client').value === 'Other Phone' && w.getAllRentals().some(r => r.id === 'r_3000_hand'), w.document.getElementById('client').value);
+    t('W4: the mid-rental work survived the switch', w.getAllRentals().some(r => (r.state.inputs.client || '') === 'Busy Here'));
 
   } catch (e) {
     results.push('HARNESS-ERROR | ' + (e && e.stack ? e.stack.split('\n').slice(0, 4).join(' / ') : e));
