@@ -187,10 +187,11 @@ async function main() {
   setVal(w, 'booking', '987654');
   await sleep(600);
 
-  // A5: XSS / escaping in saved list
+  // A5 (v10): the Saved list is gone; the name renders via textContent in the
+  // session label — no HTML injection surface — and Discard is offered.
   w.renderRentalsList();
-  const listHtml = w.document.getElementById('rentals-list-items').innerHTML;
-  t('client name escaped in saved list', listHtml.includes('&lt;test&gt;') && !w.document.querySelector('#rentals-list-items test'));
+  t('client name rendered inert in session label (no injection)', w.document.getElementById('current-label').textContent.includes('<test>') && !w.document.querySelector('#current-label test'), w.document.getElementById('current-label').textContent);
+  t('discard button visible while the form has content', !w.document.getElementById('discard-btn').hidden);
 
   // A6: full round-trip across a real reload
   const snapshot = JSON.parse(JSON.stringify({ inputs: st0.inputs, checks: st0.checks, marks: st0.marks }));
@@ -333,9 +334,7 @@ async function main() {
   t('unset webhook -> record queued locally', w.getQueue().length === 1);
   const qbar = w.document.getElementById('queue-bar');
   t('queue bar explains not-filed state', !qbar.hidden && /not filed|isn't set up/i.test(qbar.textContent), qbar.textContent.trim());
-  w.renderRentalsList();
-  const lh = w.document.getElementById('rentals-list-items').innerHTML;
-  t('list shows FINALIZED + QUEUED badges', lh.includes('FINALIZED') && lh.includes('QUEUED'));
+  t('v10: discard hidden while locked (filed paperwork is not discardable)', w.document.getElementById('discard-btn').hidden);
 
   // C1: locked form rejects edits
   const marksBefore = w.serializeState().marks.out.length;
@@ -347,15 +346,27 @@ async function main() {
   await sleep(500);
   t('locked signature pad ignores strokes', w.serializeState().sigs['sig-in-renter'] === sigBefore);
 
-  // C2: locked state survives reload
-  f = await reloadFrame(f); w = f.contentWindow;
-  t('lock survives reload', w.document.body.classList.contains('locked'));
-
-  // C3: unlock restores editing and drops stale queue entry
+  // C3: unlock — while the locked record is still on screen — restores
+  // editing and drops the stale queue entry.
   w.confirm = () => true;
   w.unlockRental();
   t('unlock re-enables editing', !w.document.body.classList.contains('locked') && !w.document.getElementById('client').disabled);
   t('unlock drops stale queued payload', w.getQueue().length === 0);
+
+  // C2 (v10): re-finalize, then reload — the unconfirmed record stays safe
+  // and queued, but the screen opens blank + unlocked. (Pre-v10 the locked
+  // record survived reload and greeted whoever opened the app next.)
+  w.finalizeRental();
+  await sleep(400);
+  t('re-finalize locks + queues again', w.document.body.classList.contains('locked') && w.getQueue().length === 1);
+  const idC2 = (w.getAllRentals().find(r => r.finalized) || {}).id;
+  f = await reloadFrame(f); w = f.contentWindow;
+  t('v10: reload after finalize opens a BLANK unlocked form', !w.document.body.classList.contains('locked') && w.document.getElementById('client').value === '');
+  t('v10: unconfirmed record survives reload, still queued + reported', w.getAllRentals().some(r => r.id === idC2) && w.getQueue().length === 1 && !w.document.getElementById('queue-bar').hidden, (w.document.getElementById('queue-bar').textContent || '').trim());
+  // Leave no queued send behind: scenario D's frame shares this origin's
+  // storage, and D's stubbed-fetch call log must only see D's own finalize.
+  w.setQueue([]);
+  await sleep(100);
 
   /* ============ Scenario D: finalize + POST with webhook URL set ============ */
   let f2 = await loadFrame('form_with_url.html');
@@ -421,14 +432,10 @@ async function main() {
   }
   t('successful send drains queue', w2.getQueue().length === 0);
   await sleep(100);
-  // Find the finalized record rather than trusting [0]: the previous
-  // document's unload flush (beforeunload doSave) can resurrect a blank
-  // rental into freshly-cleared storage ahead of the record under test.
-  // Test-only condition — nothing clears storage under a live form.
-  const recD = w2.getAllRentals().find(r => r.finalized) || w2.getAllRentals()[0];
-  t('successful send marks record FILED', !!(recD && recD.filedAt));
-  w2.renderRentalsList();
-  t('list shows FILED badge', w2.document.getElementById('rentals-list-items').innerHTML.includes('FILED'));
+  // v10: a CONFIRMED send wipes the record off the phone and clears the deck
+  t('v10: confirmed send wipes the record off the phone', !w2.getAllRentals().some(r => r.finalized), JSON.stringify(w2.getAllRentals().map(r => ({ id: r.id, f: !!r.finalized }))));
+  t('v10: screen resets to a blank unlocked form after filing', w2.document.getElementById('client').value === '' && !w2.document.body.classList.contains('locked'));
+  t('v10: filed banner confirms the filing', !w2.document.getElementById('filed-banner').hidden && /Record filed/.test(w2.document.getElementById('filed-banner').textContent), w2.document.getElementById('filed-banner').textContent);
 
   /* ============ Scenario E: failed send queues + retry succeeds ============ */
   w2.localStorage.clear();
@@ -457,8 +464,7 @@ async function main() {
   // retry succeeds
   w2.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) });
   await w2.processQueue(true);
-  const recE = w2.getAllRentals().find(r => r.finalized) || w2.getAllRentals()[0];
-  t('manual retry drains queue + files record', w2.getQueue().length === 0 && !!(recE && recE.filedAt));
+  t('manual retry drains queue + wipes the filed record (v10)', w2.getQueue().length === 0 && !w2.getAllRentals().some(r => r.finalized), JSON.stringify(w2.getAllRentals().map(r => r.id)));
 
   /* ============ Scenario F: storage failure surfaces visibly ============ */
   let f3 = await loadFrame('form_phase2.html');
@@ -474,7 +480,7 @@ async function main() {
   w3.dispatchEvent(ev);
   t('unsaved-due-to-quota still guards beforeunload', ev.defaultPrevented);
 
-  /* ============ Scenario G: list edge cases ============ */
+  /* ============ Scenario G: session edge cases (v10: no Saved list) ============ */
   // Local-only rendering tests: wipe the shared mock cloud first so this fresh
   // device doesn't pull drafts auto-pushed by earlier scenarios (that cross-
   // device pull is correct in production but pollutes these local assertions).
@@ -484,20 +490,26 @@ async function main() {
   w4.localStorage.clear();
   f4 = await reloadFrame(f4); w4 = f4.contentWindow;
   w4.confirm = () => true;
-  t('empty list renders placeholder', (w4.document.getElementById('rentals-list-items').textContent || '').includes('No saved rentals'));
-  // unnamed rental (checkbox only)
+  t('blank open: discard hidden (nothing to discard)', w4.document.getElementById('discard-btn').hidden);
+  // unnamed rental (checkbox only) still counts as content
   setCheck(w4, 'safety-1', true);
   await sleep(700);
-  t('unnamed rental shows (unnamed)', w4.document.getElementById('rentals-list-items').innerHTML.includes('(unnamed)'));
-  // duplicate names both listed
+  t('checkbox-only rental persists (content without a name)', w4.getAllRentals().length === 1 && !((w4.getAllRentals()[0].state.inputs.client || '').trim()), JSON.stringify(w4.getAllRentals().map(r => r.id)));
+  t('discard appears for the unnamed rental', !w4.document.getElementById('discard-btn').hidden);
+  // duplicate names: separate records, both tracked as handoff candidates
   w4.newRental(); setVal(w4, 'client', 'Sam Onstad'); await sleep(700);
   w4.newRental(); setVal(w4, 'client', 'Sam Onstad'); await sleep(700);
-  const rows = w4.document.querySelectorAll('#rentals-list-items .rental-row').length;
-  t('duplicate names: separate rows', rows === 3, rows + ' rows');
-  // delete current -> fresh rental, no errors
+  t('duplicate names: separate records', w4.getAllRentals().length === 3, w4.getAllRentals().length + ' records');
+  t('non-current in-progress rentals tracked as handoff candidates', w4.handoffCandidates().length === 2, JSON.stringify(w4.handoffCandidates()));
+  // delete current -> fresh blank, no errors
   w4.deleteRental(w4.getAllRentals().sort((a,b)=>b.updatedAt-a.updatedAt)[0].id);
   await sleep(200);
-  t('delete current rental recovers to new rental', w4.getAllRentals().length === 2 && w4.document.getElementById('client').value === '');
+  t('delete current rental recovers to blank', w4.getAllRentals().length === 2 && w4.document.getElementById('client').value === '');
+  // v10: reload with a blank active — the newest in-progress stray adopts
+  f4 = await reloadFrame(f4); w4 = f4.contentWindow;
+  w4.confirm = () => true;
+  await sleep(300);
+  t('v10: reload adopts the newest in-progress stray onto the blank form', w4.document.getElementById('client').value === 'Sam Onstad', w4.document.getElementById('client').value);
 
   // mark with special-char custom label is escaped, survives round-trip
   w4.prompt = () => '<b>"weird" & torn</b>';
