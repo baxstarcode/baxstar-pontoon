@@ -82,7 +82,8 @@
  *    unfinalized booking today), type that customer's name today — the form
  *    must show the amber EARLY CHECK-IN banner and fill tomorrow's date.
  *    For v8 tombstones: GET the /exec URL and confirm version says
- *    sync-truth-v8 and formBuild is 8.
+ *    sync-truth-v8 and formBuild is 10 (cleanscreen-v10: no backend behavior
+ *    change — the bump makes every pre-v10 form tab show its reload banner).
  *
  * SECURITY — honest limits: the form lives in a public GitHub repo, so the
  * /exec URL and TOKEN are both publicly readable. The token stops casual abuse
@@ -191,12 +192,14 @@ function doPost(e) {
 // `version` bumps with behavior changes so a deploy can be verified from a
 // browser — sync-truth-v8 means tombstones carry reasons and only explicit
 // resurrect pushes can clear them (no more resurrection-by-newer-timestamp).
+// cleanscreen-v10 changes NOTHING server-side: it exists so formBuild says 10
+// and every phone still on a v8/v9 tab shows the reload banner.
 function doGet() {
   return jsonOut({
     ok: true,
     service: 'baxstar-pontoon-filing',
-    version: 'phase3+tombstones+early-checkin-1+day1copy-1+v6-1+sync-truth-v8',
-    formBuild: 8,   // latest shipped form build — older tabs show a reload banner
+    version: 'phase3+tombstones+early-checkin-1+day1copy-1+v6-1+sync-truth-v8+cleanscreen-v10',
+    formBuild: 10,  // latest shipped form build — older tabs show a reload banner
     actions: ['finalize', 'saveDraft', 'getActive', 'deleteDraft', 'getTodaysBookings',
       'scheduleDay1Copy', 'cancelDay1Copy']
   });
