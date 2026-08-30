@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#040404">
+<title>Schiller's House Commission Studio</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="app">
+<header class="top">
+    <div class="brandmark"><strong>SH</strong><span>SCHILLER'S HOUSE<small>CREATE · BUILD · THRIVE</small></span></div>
+    <button class="menu" aria-label="Menu">☰</button>
+  </header>
+  <section class="hero" id="home">
+    <div class="eyebrow">Schiller's House · Owner Decision Tool</div>
+    <h1>Commission <span>Studio</span></h1>
+    <p>See what a chair produces, what it costs, what gets reserved, and what the salon actually keeps. Built from Katie's real commission plans.</p>
+    <div class="actions">
+      <button class="btn primary" data-go="owner">See Owner View →</button>
+      <button class="btn secondary" data-go="inputs">Change the numbers</button>
+    </div>
+  </section>
+  <div class="section-label">Start with a real plan</div>
+  <section class="cards">
+    <div class="card" data-plan="five"><div class="icon">5</div><div class="arrow">→</div><h3>5-Year Plan</h3><p>$100K/year with the salon share stepping 50% → 30%.</p></div>
+    <div class="card" data-plan="fast"><div class="icon">2</div><div class="arrow">→</div><h3>Fast 2-Year</h3><p>Five descending commission blocks totaling $200K.</p></div>
+    <div class="card" data-go="owner"><div class="icon">$</div><div class="arrow">→</div><h3>Owner View</h3><p>Cash, reserve, costs, chair-rent comparison, and next moves.</p></div>
+    <div class="card" data-go="inputs"><div class="icon">⌾</div><div class="arrow">→</div><h3>Photo + Math</h3><p>Keep the handwritten plan beside the live calculator.</p></div>
+  </section>
+  <section class="block" id="owner">
+    <div class="head"><div><div class="kicker">Owner view</div><h2>What is this chair doing?</h2></div><div class="note" id="planLabel">5-Year Plan</div></div>
+    <div class="owner-grid">
+      <div class="owner-card hero-card"><span>Estimated salon cash before tax</span><strong id="ownerCash">$0</strong><div class="statusline"><span>vs chair-rent benchmark</span><b id="rentDelta">$0</b></div></div>
+      <div class="owner-card"><span>Service sales</span><strong id="totalSales">$0</strong></div>
+      <div class="owner-card"><span>Stylist pay</span><strong id="stylistPay">$0</strong></div>
+      <div class="owner-card"><span>Salon gross share</span><strong id="ownerGross">$0</strong></div>
+      <div class="owner-card"><span id="fundLabel">Fund / reserve</span><strong id="fundAmount">$0</strong></div>
+      <div class="owner-card"><span>Entered salon costs</span><strong id="salonCosts">$0</strong></div>
+      <div class="owner-card"><span>Services / hour</span><strong id="servicesHour">0.00</strong></div>
+    </div>
+    <div class="pill" id="confidencePill">Uses Katie's documented assumptions</div>
+    <div class="actions-list" id="actionsList"></div>
+    <div id="tierWrap"></div>
+    <div class="save-row"><button class="btn primary" id="saveBtn">Save this snapshot</button><button class="btn secondary" id="csvBtn">Export CSV</button></div>
+  </section>
+  <section class="block" id="inputs">
+    <div class="head"><div><div class="kicker">Plan inputs</div><h2>Change the assumptions</h2></div><div class="note">Nothing is hidden.</div></div>
+    <div class="plan-choice field"><label>Commission model</label><select id="planMode"><option value="five">Katie 5-Year Plan</option><option value="fast">Katie Fast 2-Year Plan</option><option value="custom">Custom Plan</option></select><small id="modeHelp">Applies the documented 50%, 45%, 40%, 35%, 30% salon shares by year.</small></div>
+    <div class="photo-zone">
+      <label class="photo-label" for="photoInput"><div><strong>Take or choose a photo</strong><span>Reference only. The image never leaves this device.</span></div></label>
+      <input id="photoInput" type="file" accept="image/*" capture="environment">
+      <img id="photoPreview" class="photo-preview hidden" alt="Worksheet preview">
+    </div>
+    <div class="inputs" style="margin-top:10px">
+      <div class="field" id="annualSalesField"><label>Annual service sales</label><input id="annualSales" type="number" inputmode="decimal" min="0" max="10000000" step="1000" value="100000"><small>Used by the 5-year and custom plans.</small></div>
+      <div class="field hidden-field" id="yearsField"><label>Plan length</label><input id="years" type="number" inputmode="numeric" min="1" max="20" step="1" value="5"><small>Custom plan only.</small></div>
+      <div class="input-row hidden-field" id="customShares">
+        <div class="field"><label>Salon share</label><input id="ownerPct" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="40"><small>% of service sales</small></div>
+        <div class="field"><label>Stylist share</label><input id="stylistPct" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="60"><small>Must total 100%</small></div>
+      </div>
+      <div class="field"><label>Fund / reserve rate</label><input id="fundPct" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="50"><small>% of salon gross share set aside.</small></div>
+      <div class="field"><label>Fund purpose</label><select id="fundPurpose"><option value="owner">Owner reserve / investment</option><option value="stylist">Stylist benefit / obligation</option><option value="other">Other restricted use</option></select><small>This changes the label, not the arithmetic.</small></div>
+      <div class="field"><label>Chair rent benchmark</label><input id="chairRent" type="number" inputmode="decimal" min="0" max="100000" step="50" value="2000"><small>Monthly alternative.</small></div>
+      <div class="input-row">
+        <div class="field"><label>Merchant fees</label><input id="merchantPct" type="number" inputmode="decimal" min="0" max="20" step="0.1" value="0"><small>% of service sales</small></div>
+        <div class="field"><label>Other variable cost</label><input id="variablePct" type="number" inputmode="decimal" min="0" max="50" step="0.1" value="0"><small>% of service sales</small></div>
+      </div>
+      <div class="field"><label>Allocated overhead</label><input id="annualOverhead" type="number" inputmode="decimal" min="0" max="1000000" step="100" value="0"><small>Annual cost assigned to this chair. Leave 0 if unknown.</small></div>
+      <div class="input-row">
+        <div class="field"><label>Average service</label><input id="avgTicket" type="number" inputmode="decimal" min="1" max="10000" step="1" value="28"><small>Average ticket</small></div>
+        <div class="field"><label>Tip rate</label><input id="tipPct" type="number" inputmode="decimal" min="0" max="100" step="0.1" value="20"><small>Informational only</small></div>
+      </div>
+      <div class="input-row">
+        <div class="field"><label>Days / week</label><input id="daysPerWeek" type="number" inputmode="decimal" min="1" max="7" step="0.5" value="5"><small>Production pace</small></div>
+        <div class="field"><label>Hours / day</label><input id="hoursPerDay" type="number" inputmode="decimal" min="1" max="24" step="0.5" value="8"><small>Production pace</small></div>
+      </div>
+    </div>
+    <p class="helper">Costs default to 0 because we do not yet have Katie's true merchant, supply, payroll-related, and overhead allocations. Enter them when known; the tool will not pretend unknown costs are zero-profit.</p>
+  </section>
+  <section class="block" id="scenarios">
+    <div class="head"><div><div class="kicker">Scenarios</div><h2>What if?</h2></div><div class="note">One tap, then edit.</div></div>
+    <div class="scenario-buttons">
+      <button data-scenario="sales10">Sales +10%</button><button data-scenario="ticket3">Average ticket +$3</button>
+      <button data-scenario="fund25">Reserve 25%</button><button data-scenario="fund0">No reserve</button>
+    </div>
+    <div class="insight" id="scenarioNote" style="margin-top:12px">Scenarios change the live inputs. Use Reset to return to Katie's 5-year example.</div>
+    <div class="save-row"><button class="btn secondary" id="resetBtn">Reset Katie example</button><button class="btn secondary" data-plan="fast">Load fast 2-year</button></div>
+  </section>
+  <section class="block" id="history">
+    <div class="head"><div><div class="kicker">History</div><h2>Saved snapshots</h2></div><div class="note">Stored on this device.</div></div>
+    <div class="history-list" id="historyList"></div>
+    <button class="btn secondary" id="clearHistory" style="width:100%;margin-top:10px">Clear history</button>
+  </section>
+  <p class="fineprint">Decision-planning prototype. Not payroll, tax, legal, employment, securities, or accounting advice. Fund ownership and treatment should be confirmed before becoming a binding employee promise.<br><span id="attribution"></span></p>
+</main>
+<nav class="navbar">
+  <button class="nav active" data-go="home"><b>⌂</b>Home</button>
+  <button class="nav" data-go="inputs"><b>▦</b>Inputs</button>
+  <button class="nav" data-go="owner"><b>$</b>Owner</button>
+  <button class="nav" data-go="scenarios"><b>↗</b>Scenarios</button>
+  <button class="nav" data-go="history"><b>◷</b>History</button>
+</nav>
+<script src="app.js"></script>
+</body>
+</html>
