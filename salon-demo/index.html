@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#040404">
 <title>Schiller's House Commission Studio</title>
+<script>
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+function resetOpeningScroll(){
+  const root = document.documentElement;
+  const previous = root.style.scrollBehavior;
+  root.style.scrollBehavior = 'auto';
+  window.scrollTo(0, 0);
+  root.style.scrollBehavior = previous;
+}
+resetOpeningScroll();
+window.addEventListener('pageshow', () => {
+  resetOpeningScroll();
+  requestAnimationFrame(() => requestAnimationFrame(resetOpeningScroll));
+});
+</script>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
