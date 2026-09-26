@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemap.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://baxstaroutdoors.com/</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+    <image:image><image:loc>https://baxstaroutdoors.com/assets/og-baxstar-outdoors.jpg</image:loc><image:title>Baxstar Outdoors 22' Sylvan Mirage pontoon on Detroit Lake</image:title></image:image>
+    <image:image><image:loc>https://baxstaroutdoors.com/assets/dock-group-1400.webp</image:loc><image:title>Pontoon delivered to a Detroit Lake dock</image:title></image:image>
+    <image:image><image:loc>https://baxstaroutdoors.com/assets/cruise-bachelorette-sylvan-1200.webp</image:loc><image:title>Bachelorette party lake cruise on Detroit Lake</image:title></image:image>
+    <image:image><image:loc>https://baxstaroutdoors.com/assets/cruise-captain-wheel-1200.webp</image:loc><image:title>Private lake cruise with Captain Brady at the wheel</image:title></image:image>
+    <image:image><image:loc>https://baxstaroutdoors.com/assets/pontoon-side-900.webp</image:loc><image:title>Baxstar Outdoors 22-foot Sylvan rental pontoon with 115 hp Yamaha</image:title></image:image>
+  </url>
+  <url><loc>https://baxstaroutdoors.com/llms.txt</loc><lastmod>2026-09-26</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+</urlset>

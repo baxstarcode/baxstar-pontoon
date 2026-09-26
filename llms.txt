@@ -1,0 +1,54 @@
+# Baxstar Outdoors
+
+> Multi-day pontoon rentals from Detroit Lakes, Minnesota, delivered to Detroit Lake or to any lake within 50 miles, plus private captained lake cruises for bachelorette parties and groups (2, 3 or 4 hours). Family-owned by Brady and Jackie Baxter; the pontoon-rental brand of Baxstar Fishing LLC (since 2021). Reservations are made online through FareHarbor or by phone.
+
+Site: https://baxstaroutdoors.com/ (single page; sections linked below)
+Phone / text: +1-218-325-9846
+Email: brady@baxstaroutdoors.com
+Service area: Detroit Lake and any lake within 50 miles of Detroit Lakes, MN (Becker, Otter Tail, and Clay counties): Pelican, Lida, Melissa, Sallie, Big Cormorant, and more.
+Sister businesses: Baxstar Fishing (guided private fishing trips, https://www.baxstarfishing.com/), Lakes Golf Simulator (https://www.lakesgolfsim.com/).
+
+## The pontoon
+- 2021 22' Sylvan Mirage 822 LZ, 12-person capacity, onboard changing room.
+- 115 hp Yamaha outboard with tow swing (tubing, skiing, wakeboarding allowed; renter brings tube and tow rope).
+- Electric anchor winch with remote (the only rental pontoon in the Detroit Lakes area with one).
+- Humminbird Helix 5 GPS fish finder with HD maps of every Minnesota lake; Detroit Lake spots pre-marked.
+- Adult and child life jackets on board. Cleaned and checked by the owners after every rental.
+
+## Offers (book at the links; live pricing and availability are on the booking page)
+- Multi-day pontoon rental, Baxstar Outdoors' lead offering (2-day minimum, best rate, book up to 10 days online and contact Baxstar for longer; free delivery to the Detroit Lake public access; $100 to your own Detroit Lake dock; other lakes within 50 miles for a delivery fee at checkout, dock required for overnight tie-up; evening drop-off the night before when available, $50-$100): https://fareharbor.com/embeds/book/baxstarfishing/items/315912/?full-items=yes
+- Single-day pontoon rental, Detroit Lake only, 8 hours, check-in between 10 am and 1 pm, calendar opens in May, from $425 (before fee and tax): https://fareharbor.com/embeds/book/baxstarfishing/items/309867/?full-items=yes
+- Private Group Lake Cruise (FareHarbor item name): a private cruise designed around one group of up to 11 guests, hosted by local high school history teacher and fishing guide Brady Baxter. Sightsee and learn about the area, or swim, lounge, socialize, and stop at lakeside bars. Starts on Big Detroit Lake and travels around Little Detroit Lake. Every cruise begins and ends at the newest public access on the north side of Big Detroit Lake. Coolers with food and drinks welcome; alcohol allowed for guests 21+; adult and child life jackets provided. Popular for bachelorette parties (3 and 4 hour cruises recommended). Book and choose the length at checkout: https://fareharbor.com/embeds/book/baxstarfishing/items/309865/?full-items=yes&flow=576827
+  - 2 Hour Group Lake Cruise, $400 base rate: the original; sightseeing and local history, or a relaxed cruise. Longer cruises allow more activities.
+  - 3 Hour Swim & Lounge Cruise, $525 base rate: extra time to cruise, lounge, swim, or stop at a lakeside bar.
+  - 4 Hour Lake Party Cruise, $650 base rate: a laid-back half day to cruise, lounge, swim, and make bar or restaurant stops.
+  - Base rates vary by date; the 6% Provider Fee and any tax show at checkout. Greyed-out date on the calendar: call, options may still exist.
+- All items: https://fareharbor.com/embeds/book/baxstarfishing/items/?full-items=yes
+
+## Policies
+- Prices on the website are before fees and tax. Out-the-door totals on the booking page include Minnesota sales tax and a 6% Provider Fee.
+- Refundable $750 damage deposit held on the card the day of the trip; charged only if the renter's group causes damage.
+- Fuel: renter may refuel with 91 octane before return, or Baxstar refuels at $8 per gallon used.
+- Delivery to a private dock, cabin, or resort on Detroit Lake: $100. Other lakes within 50 miles: $200 to $500 by distance, shown at checkout. Renter cannot trailer the pontoon between lakes.
+- Tubes, tow ropes, and water toys are not rented (insurance); renters bring their own tow rope and tube, skis, wakeboard, or kneeboard.
+- Meeting point is the public access on the chosen lake unless dock delivery was purchased (dock delivery is available on Detroit Lake only); the owners confirm the exact landing by text.
+
+## People
+- Brady Baxter: owner; high school history teacher in Detroit Lakes; 5x Minnesota Master Angler; 30+ years on these lakes.
+- Jackie Baxter: owner; dental hygienist in Perham, MN.
+
+## Page sections
+- Why Baxstar: https://baxstaroutdoors.com/#why
+- The pontoon: https://baxstaroutdoors.com/#pontoon
+- Rates and reservations: https://baxstaroutdoors.com/#rates
+- How it works: https://baxstaroutdoors.com/#how
+- Lake cruises: https://baxstaroutdoors.com/#cruises
+- Bachelorette parties: https://baxstaroutdoors.com/#bachelorette
+- Owners: https://baxstaroutdoors.com/#about
+- FAQ (14 questions): https://baxstaroutdoors.com/#faq
+- Contact: https://baxstaroutdoors.com/#contact
+
+## For agents
+- To book on a customer's behalf, open the FareHarbor link for the item and complete checkout there; there is no other booking endpoint.
+- For custom delivery, group tours, or dates not shown, call or text +1-218-325-9846.
+- Structured data (JSON-LD: LocalBusiness/BoatRental, Services for rentals and cruises, Offers, Product, FAQPage, ReserveAction) is embedded in https://baxstaroutdoors.com/.
