@@ -10,7 +10,7 @@ Everything pontoon-side for **Baxstar Outdoors** (the rental brand of Baxstar Fi
 
 `index.html` + `assets/` at the repo root are the Baxstar Outdoors website, the single-page replacement for the Wix site (September 2026). One self-contained file, no build step: edit `index.html` directly. Brady-specific values (phone, email, FareHarbor links, displayed prices) live in the `BX` config block near the bottom of `index.html`. `llms.txt`, `robots.txt`, and `sitemap.xml` sit beside it for search engines and AI assistants.
 
-Served by GitHub Pages from `main` at https://baxstarcode.github.io/baxstar-pontoon/ until the custom domain is connected. Rollback to the pre-site state: tag `pre-outdoors-site-2026-09-26`.
+Served by GitHub Pages from `main` at https://baxstarcode.github.io/baxstar-pontoon/ until the custom domain is connected. Rollback to the pre-site state: branch `snapshot/pre-outdoors-site-2026-09-26`.
 
 ## 1. Website sections (Wix embeds)
 

@@ -99,6 +99,8 @@ header{position:sticky;top:0;z-index:60;background:rgba(8,8,10,.78);backdrop-fil
 .nav-links .nav-phone:hover{border-color:var(--red)}
 .nav-phone svg{width:18px;height:18px}
 @media(max-width:1180px){.nav-links a:not(.nav-cta):not(.nav-phone){display:none}}
+/* full text nav only once Barlow Condensed has loaded: the fallback font is ~25% wider and would overflow */
+html:not(.nav-font) .nav-links a:not(.nav-cta):not(.nav-phone){display:none}
 @media(max-width:820px){.brand span{display:none}}
 
 /* ---------- hero ---------- */
@@ -1262,6 +1264,14 @@ var BX = {
 
   // booking links open in a new tab (FareHarbor lightframe is not used: no third-party script on this page)
   document.querySelectorAll('a[data-book]').forEach(function(a){ a.target = '_blank'; a.rel = 'noopener'; });
+
+  // show the full text nav only when its condensed font is really available (fallback fonts overflow the header)
+  if (document.fonts && document.fonts.load) {
+    // load() resolves with the faces it actually loaded; an empty list means the web font never arrived
+    document.fonts.load('600 15px "Barlow Condensed"').then(function(faces){
+      if (faces && faces.length) document.documentElement.classList.add('nav-font');
+    }).catch(function(){});
+  }
 
   // cruise carousel: native swipe + scroll-snap; buttons and arrow keys step one slide
   var track = document.getElementById('cruise-track');
