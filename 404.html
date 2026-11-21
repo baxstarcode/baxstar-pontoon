@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>That page moved — Baxstar Outdoors</title>
+<!-- Old addresses from the previous (Wix) site land here. GitHub Pages serves this file for any address that
+     no longer exists. It sends the visitor to the matching part of the one-page site, and still answers
+     "not found" to Google so the old links drop out of search. Keep this file at the repo root. -->
+<script>
+(function(){
+  var p = (location.pathname + location.search).toLowerCase();
+  var map = [
+    [/bachelor/, '#bachelorette'],
+    [/tour|cruise|charter|party/, '#cruises'],
+    [/rate|pric|cost/, '#rates'],
+    [/faq|question|polic/, '#faq'],
+    [/contact|call|email/, '#contact'],
+    [/about|team|owner/, '#about'],
+    [/how|deliver/, '#how'],
+    [/pontoon|boat|rental|sylvan|fleet/, '#pontoon']
+  ];
+  var hash = '';
+  for (var i = 0; i < map.length; i++) { if (map[i][0].test(p)) { hash = map[i][1]; break; } }
+  window.__dest = 'https://baxstaroutdoors.com/' + hash;
+  location.replace(window.__dest);
+})();
+</script>
+<noscript><meta http-equiv="refresh" content="0; url=https://baxstaroutdoors.com/"></noscript>
+<style>
+  html,body{height:100%;margin:0}
+  body{background:#0a0b0d;color:#f3efe6;font:500 17px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}
+  h1{font:700 30px/1.15 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0 0 10px}
+  p{margin:0 0 22px;color:#c9c4b8}
+  a.btn{display:inline-block;min-height:48px;line-height:48px;padding:0 26px;border-radius:999px;background:#d7261e;color:#fff;font-weight:700;text-decoration:none}
+  .tel{display:block;margin-top:18px;color:#c9c4b8}
+  .tel a{color:#f3efe6}
+</style>
+</head>
+<body>
+  <main>
+    <h1>That page moved.</h1>
+    <p>Baxstar Outdoors is now one page. Taking you there&hellip;</p>
+    <a class="btn" href="https://baxstaroutdoors.com/">Go to Baxstar Outdoors</a>
+    <span class="tel">Or call <a href="tel:+12183259846">218-325-9846</a></span>
+  </main>
+</body>
+</html>
